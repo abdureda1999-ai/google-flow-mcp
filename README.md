@@ -100,11 +100,25 @@ Then start ChatGPT mode:
 uvx --from git+https://github.com/abdureda1999-ai/google-flow-mcp google-flow-mcp chatgpt
 ```
 
-It prints a link like `https://something.trycloudflare.com/<secret>/mcp`. In ChatGPT, turn on **Developer mode** (Settings → Apps & Connectors → Advanced), create a connector, paste the link, and choose **No authentication**.
+It prints a link like `https://something.trycloudflare.com/<secret>/mcp`. Then add it to ChatGPT once:
 
-- Ask ChatGPT for an image and it shows the picture in the chat, with a private **download link**. Videos come back with a download link too.
+1. In ChatGPT, open **Plugins** (Settings → Plugins → **Browse directory**), click **Add** → **Add custom MCP server**.
+2. Fill in:
+   - **Name:** `Google Flow`
+   - **Server URL:** the link from your Terminal
+   - **Authentication:** **No authentication**
+3. Tick **I understand and want to continue**, then click **Create as a plugin**.
+
+**Using it:** in any chat, type **@Google Flow**, pick it, and ask for an image, for example:
+
+> *@Google Flow make a 9:16 worm's-eye shot of a red soda can on grass against a blue summer sky*
+
+ChatGPT shows "Generating image in Google Flow…", and after about a minute **the picture appears right in the chat** with a download link. Videos come back with a download link.
+
+- Use a normal chat. ChatGPT's **Work** / agent mode opens Flow in its own browser instead of using this plugin, and won't show the image in the chat.
 - Keep that Terminal window open while you use ChatGPT. Your computer must stay on.
-- The link changes each time you start it, unless you set `FLOW_SECRET` (the secret part stays the same; the tunnel address still changes).
+- **The link changes each time the tunnel restarts.** Then open **Plugins → Google Flow**, update the URL, and click **Refresh tools**. Click **Refresh tools** after updating this server too.
+- To keep the same link, set `FLOW_SECRET` (keeps the secret part) and `FLOW_PUBLIC_URL` (your own fixed tunnel address, for example a named Cloudflare tunnel).
 - 🔒 **Anyone with the link can spend your Flow credits.** Don't share it, and press Ctrl-C when you're done.
 
 <details>

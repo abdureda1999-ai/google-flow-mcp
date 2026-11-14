@@ -572,7 +572,7 @@ def run_chatgpt_mode(port: int) -> None:
     if public_url:
         print("ChatGPT connector URL (paste this into ChatGPT, keep it private):", file=sys.stderr)
         print(f"\n    {public_url}{path}\n", file=sys.stderr)
-        print("In ChatGPT: turn on Developer mode (Settings > Apps & Connectors > Advanced), then create a connector.", file=sys.stderr)
+        print("In ChatGPT: Plugins > Add > Add custom MCP server. Then type @Google Flow in a chat.", file=sys.stderr)
         print("Authentication: No authentication (the secret in the URL protects it).", file=sys.stderr)
     else:
         print("Could not start a public tunnel. Install cloudflared and run again:", file=sys.stderr)
