@@ -42,7 +42,7 @@ The video tools use your Flow sign-in by default. If you set `GEMINI_API_KEY` an
 
 ### Setup
 ```bash
-git clone https://github.com/YOUR_USERNAME/google-flow-mcp.git
+git clone https://github.com/abdureda1999-ai/google-flow-mcp.git
 cd google-flow-mcp
 python3 -m venv .venv
 .venv/bin/pip install -e .
