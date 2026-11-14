@@ -4,7 +4,6 @@
       "command": "/ABSOLUTE/PATH/TO/google-flow-mcp/.venv/bin/google-flow-mcp",
       "args": ["--transport", "stdio"],
       "env": {
-        "GEMINI_API_KEY": "YOUR_GEMINI_API_KEY",
         "FLOW_MEDIA_DIR": "/ABSOLUTE/PATH/TO/google-flow-mcp/media"
       }
     }

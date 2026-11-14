@@ -1,56 +1,67 @@
 # 🎬 Google Flow MCP Server (`google-flow-mcp`)
 
-Connect **Google Flow**'s AI Filmmaking & Creative Studio pipeline (**Gemini Omni 1.2 Flash** video engine + **Nano Banana 2.1** Whisk/reference frame studio + **Gemini 4 Hydrogen** storyboard director) directly to **Claude Desktop**, **Claude Code**, **ChatGPT**, and **Antigravity IDE**.
+Use **Google Flow** (Google's AI video studio at [flow.google.com](https://flow.google.com)) from **Claude Desktop**, **Claude Code**, and **ChatGPT**.
 
-Stop tab-hopping between ChatGPT, Claude, Whisk, and video generators. Brainstorm a campaign in Claude or ChatGPT and let the assistant generate frames, interpolate keyframes, animate product shots, and extend scenes directly on your machine.
+Plan a shot with your assistant, then ask it to generate the video. The server drives Flow with **your own Google account and Flow credits**, so you don't need an API key.
+
+> ⚠️ **Unofficial project.** This is not made by or affiliated with Google. Sign-in mode automates the Flow website in a Chrome window on your computer. Automating a website may go against Google's Terms of Service, and Google can change Flow's UI at any time, which can break this tool. Use it at your own risk with your own account.
 
 ---
 
-## ✨ Features & Tools
+## ✨ Tools
 
-| Tool Name | Engine Model | Capability |
+| Tool | Needs | What it does |
 | :--- | :--- | :--- |
-| `flow_storyboard_director` | `gemini-4-hydrogen` | Turns a creative brief or product photo into a structured multi-shot storyboard with ready-to-run frame & motion prompts. |
-| `flow_generate_frame` | `gemini-nano-banana-2.1` / `gemini-3-pro-image` | Generates starting frames, ending keyframes, or **Whisk-style multi-image fusion** (up to 14 reference images for product, lighting, and style consistency) at `1K`, `2K`, or `4K`. |
-| `flow_text_to_video` | `gemini-omni-1.2-flash` | Generates `3s`–`15s` commercial & cinematic video clips in `16:9` or `9:16` at `360p`, `720p`, `1080p`, or `4k` with custom camera & sound design. |
-| `flow_frames_to_video` | `gemini-omni-1.2-flash` | **First-Frame & Keyframe Interpolation**: Animates a starting image (`first_frame`) or smoothly transitions between `first_frame` and `last_frame` (e.g., Blender 3D previs frames or studio product shots). |
-| `flow_reference_to_video` | `gemini-omni-1.2-flash` | **Ingredients / Reference-to-Video (R2V)**: Guides video generation using up to 6 reference images (characters, products, environments) and reference motion videos. |
-| `flow_extend_or_edit_video` | `gemini-omni-1.2-flash` | **Scene Builder**: Extends an existing clip by `3s`–`10s` per turn (up to `30s` total) or edits style/lighting/objects turn-by-turn while preserving consistency. |
+| `flow_browser_login` | Chrome | Opens Flow in Chrome so you can sign in once. Your sign-in is saved in `~/.google-flow-mcp/chrome-profile`. |
+| `flow_text_to_video` | Flow sign-in | Generates a video from a text prompt with your Flow credits and saves the MP4. |
+| `flow_frames_to_video` | Flow sign-in *(experimental)* | Animates a starting image, or transitions from a first frame to a last frame. |
+| `flow_reference_to_video` | Flow sign-in *(experimental)* | Generates a video guided by reference images (product, character, style). |
+| `flow_generate_frame` | Gemini API key | Generates a still image or keyframe, optionally from reference images. |
+| `flow_extend_or_edit_video` | Gemini API key | Extends or edits an existing clip. |
+| `flow_storyboard_director` | Gemini API key | Turns a brief into a multi-shot storyboard with frame and motion prompts. |
+
+The video tools use your Flow sign-in by default. If you set `GEMINI_API_KEY` and pass `use_browser_credits=false`, they use the Gemini API instead.
+
+### How sign-in mode works
+1. Opens Flow in Chrome with a saved profile, so you stay signed in.
+2. Creates a new project, types your prompt, and starts the generation.
+3. Flow asks before spending credits (for example *"costing 30 credits?"*). The tool clicks **Approve** for that one generation only, never "Always approve", and returns the cost as `credits_cost`.
+4. Waits up to 10 minutes for the video, then saves it to your media folder.
+
+**Leave the Chrome window open until the tool finishes.** Closing it stops the download, but the clip may still finish in your Flow project.
 
 ---
 
-## 🚀 Quick Installation
+## 🚀 Install
 
-### Prerequisites
-- **Python 3.10+**
-- **FFmpeg** installed on your system (`brew install ffmpeg` on macOS)
-- A **Google Gemini API Key** ([Get one from Google AI Studio](https://aistudio.google.com/apikey))
+### Requirements
+- Python 3.10+
+- Google Chrome
+- A Google account with Google Flow access and credits
+- Optional: a [Gemini API key](https://aistudio.google.com/apikey) for the API-only tools
 
 ### Setup
 ```bash
 git clone https://github.com/YOUR_USERNAME/google-flow-mcp.git
 cd google-flow-mcp
-
-# Create virtual environment and install dependencies
 python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
+Sign-in mode uses your installed Google Chrome, so no extra browser download is needed.
 
 ---
 
-## 🔌 1. Connect to Claude (Claude Desktop & Claude Code)
+## 🔌 Connect to Claude
 
-### Option A: Claude Code CLI
-Run one command in your terminal:
+### Claude Code
 ```bash
 claude mcp add google-flow \
-  -e GEMINI_API_KEY="your_api_key_here" \
   -e FLOW_MEDIA_DIR="$PWD/media" \
   -- "$PWD/.venv/bin/google-flow-mcp" --transport stdio
 ```
 
-### Option B: Claude Desktop App
-Add the following to your `claude_desktop_config.json` (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+### Claude Desktop
+Add this to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 
 ```json
 {
@@ -59,7 +70,6 @@ Add the following to your `claude_desktop_config.json` (`~/Library/Application S
       "command": "/ABSOLUTE/PATH/TO/google-flow-mcp/.venv/bin/google-flow-mcp",
       "args": ["--transport", "stdio"],
       "env": {
-        "GEMINI_API_KEY": "your_api_key_here",
         "FLOW_MEDIA_DIR": "/ABSOLUTE/PATH/TO/google-flow-mcp/media"
       }
     }
@@ -67,48 +77,58 @@ Add the following to your `claude_desktop_config.json` (`~/Library/Application S
 }
 ```
 
----
+Add `"GEMINI_API_KEY": "..."` to `env` only if you want the API-only tools.
 
-## 🤖 2. Connect to ChatGPT
-
-You can connect this server to ChatGPT in two ways:
-
-### Option A: ChatGPT MCP Connector (Plus / Pro / Team / Enterprise)
-1. Start the server in `sse` or `streamable-http` mode:
-   ```bash
-   export GEMINI_API_KEY="your_api_key_here"
-   .venv/bin/google-flow-mcp --transport sse --port 8000
-   ```
-2. Expose port `8000` over HTTPS using Cloudflare Tunnel or `ngrok`:
-   ```bash
-   ngrok http 8000
-   ```
-3. In ChatGPT **Settings → Connectors / Developer Mode → Add MCP Server**, enter your tunnel URL (e.g., `https://your-tunnel.ngrok-free.app/sse`).
-
-### Option B: ChatGPT Custom GPT Actions (OpenAPI REST Bridge)
-1. Start the server in `openapi` mode:
-   ```bash
-   export GEMINI_API_KEY="your_api_key_here"
-   .venv/bin/google-flow-mcp --transport openapi --port 8000
-   ```
-2. Expose port `8000` via `ngrok http 8000`.
-3. In ChatGPT **Create a Custom GPT → Configure → Actions → Import from URL**, paste:
-   ```text
-   https://your-tunnel.ngrok-free.app/openapi.json
-   ```
+Then ask Claude: *"Run `flow_browser_login`"*, sign in in the Chrome window, and you're ready.
 
 ---
 
-## 💡 Example Prompts (In Claude or ChatGPT)
+## 🤖 Connect to ChatGPT
 
-- **Full Campaign Pipeline:**
-  > *"Plan a 3-shot luxury CGI commercial for a matte-black espresso machine using `flow_storyboard_director`. Then generate the 2K starting frame for Shot 1 with `flow_generate_frame` and animate it into a 10-second 1080p commercial clip using `flow_frames_to_video`."*
-- **Blender Previs / First-to-Last Frame Transition:**
-  > *"Use `flow_frames_to_video` with `/path/to/start_render.png` as `first_frame` and `/path/to/end_render.png` as `last_frame` to create an 8-second dramatic lighting transition."*
-- **Scene Extension:**
-  > *"Extend the video we just generated (`previous_interaction_id`) by 10 seconds as the camera pulls back through neon-lit rain."*
+ChatGPT runs in the cloud, so it needs a public HTTPS address that reaches the server on your computer. Because sign-in mode opens Chrome on your machine, **your computer must be on with the server and tunnel running** while ChatGPT uses it.
+
+### Option A: MCP connector (ChatGPT developer mode)
+```bash
+.venv/bin/google-flow-mcp --transport streamable-http --port 8000
+```
+In another terminal, expose it over HTTPS:
+```bash
+ngrok http 8000
+```
+In ChatGPT, open **Settings → Connectors → Advanced → Developer mode**, add a connector, and enter `https://YOUR-TUNNEL.ngrok-free.app/mcp`.
+
+### Option B: Custom GPT Actions (OpenAPI)
+```bash
+.venv/bin/google-flow-mcp --transport openapi --port 8000
+```
+Expose it with `ngrok http 8000`, then in **Create a GPT → Configure → Actions → Import from URL** paste `https://YOUR-TUNNEL.ngrok-free.app/openapi.json`.
+
+> 🔒 Anyone with your tunnel URL can use your Flow credits. Don't share the URL, and stop the tunnel when you're done.
 
 ---
+
+## 💡 Example prompts
+
+- *"Use `flow_text_to_video` to make a cinematic studio commercial of a matte black sports car under moving neon light, 16:9."*
+- *"Make a 9:16 vertical clip of coffee being poured in slow motion with warm morning light."*
+- *"Use `flow_frames_to_video` with `/path/to/start.png` as the first frame and `/path/to/end.png` as the last frame for an 8-second transition."*
+
+---
+
+## ⚙️ Configuration
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `FLOW_MEDIA_DIR` | `./media` | Where videos, images and screenshots are saved. |
+| `GEMINI_API_KEY` | not set | Turns on the API-only tools. |
+| `FLOW_HOST` / `FLOW_PORT` | `127.0.0.1` / `8000` | Address for the HTTP transports. |
+
+## 🛠 Troubleshooting
+
+- **"Still on the Google Flow landing page"**: run `flow_browser_login` and finish signing in.
+- **"Could not find the Flow prompt box"**: Flow's website changed. Please open an issue.
+- **Chrome says the profile is in use**: close any Chrome window the tool left open, then try again.
+- **`not_started` status**: Flow didn't ask to approve a generation. Check the saved `ui_screenshot`.
 
 ## 📄 License
-MIT License
+MIT

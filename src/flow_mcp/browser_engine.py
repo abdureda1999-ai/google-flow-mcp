@@ -60,6 +60,8 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
         user_data_dir=profile_dir,
         channel="chrome",
         headless=headless,
+        # Keep Chrome's sandbox on (Playwright otherwise passes --no-sandbox).
+        chromium_sandbox=True,
         accept_downloads=True,
         viewport={"width": 1440, "height": 900},
         args=[
@@ -68,6 +70,36 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
             "--no-default-browser-check",
         ],
     )
+
+
+_LANDING_CTA_RE = re.compile(r"create with (google )?flow|get started|start creating", re.I)
+
+
+def _click_landing_cta(page: Any) -> bool:
+    """Click the public landing page's call-to-action (a button or a link). Returns True if clicked."""
+    for role in ("button", "link"):
+        cta = page.get_by_role(role, name=_LANDING_CTA_RE)
+        if cta.count() > 0 and cta.first.is_visible():
+            cta.first.click()
+            time.sleep(4)
+            return True
+    return False
+
+
+def _is_in_flow_workspace(page: Any) -> bool:
+    """True only when a signed-in Flow workspace is showing, not the public landing or sign-in page."""
+    url = page.url
+    if "accounts.google.com" in url or "/about" in url:
+        return False
+    # The public landing page's CTA means we are not inside the app yet.
+    for role in ("button", "link"):
+        cta = page.get_by_role(role, name=re.compile(r"create with (google )?flow", re.I))
+        if cta.count() > 0 and cta.first.is_visible():
+            return False
+    has_textarea = page.locator("textarea:visible").count() > 0
+    new_project = page.get_by_text(re.compile(r"new project", re.I))
+    has_new_project = new_project.count() > 0 and new_project.first.is_visible()
+    return has_textarea or has_new_project
 
 
 def login_and_verify_flow_session(wait_seconds: int = 120) -> Dict[str, Any]:
@@ -82,24 +114,21 @@ def login_and_verify_flow_session(wait_seconds: int = 120) -> Dict[str, Any]:
             page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(4)
 
-            # Check if we need to click "Sign in" or "Create with Flow"
+            # On the public landing page, click "Create with Google Flow" once so the
+            # user is taken to Google sign-in (or straight into the app if already signed in).
+            _click_landing_cta(page)
+
             start_time = time.time()
             logged_in = False
 
             while time.time() - start_time < wait_seconds:
-                url = page.url
-                content = page.content().lower()
-                # Check if inside the Flow project workspace or New Project screen
-                has_textarea = page.locator("textarea").count() > 0
-                has_new_project = (
-                    page.get_by_text("New project", exact=False).count() > 0
-                    or page.get_by_role("button", name=re.compile(r"new project|create", re.I)).count() > 0
-                )
-
-                if ("accounts.google.com" not in url) and (has_textarea or has_new_project):
-                    logged_in = True
-                    break
-
+                try:
+                    if _is_in_flow_workspace(page):
+                        logged_in = True
+                        break
+                except Exception:
+                    # Page may be mid-navigation during sign-in; keep waiting.
+                    pass
                 time.sleep(2)
 
             screenshot_path = os.path.join(get_media_dir(), "flow_session_status.png")
@@ -127,8 +156,9 @@ def generate_video_via_flow_browser(
     last_frame: Optional[str] = None,
     reference_images: Optional[List[str]] = None,
     aspect_ratio: str = "16:9",
+    duration: Optional[int] = None,
     output_path: Optional[str] = None,
-    timeout_seconds: int = 240,
+    timeout_seconds: int = 600,
     headless: bool = False,
 ) -> Dict[str, Any]:
     """Automates the live Google Flow web UI (`labs.google/fx/tools/flow`) using your logged-in
@@ -162,13 +192,12 @@ def generate_video_via_flow_browser(
             page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(5)
 
-            # 1. If on landing page, click "Create with Flow" or "New project"
-            for btn_pattern in [r"create with flow", r"new project", r"get started", r"start creating"]:
-                btn = page.get_by_role("button", name=re.compile(btn_pattern, re.I))
+            # 1. If on the public landing page, click "Create with Google Flow" (button or link)
+            if not _click_landing_cta(page):
+                btn = page.get_by_role("button", name=re.compile(r"new project", re.I))
                 if btn.count() > 0 and btn.first.is_visible():
                     btn.first.click()
                     time.sleep(4)
-                    break
 
             # Also check links/divs with "New project"
             new_proj_text = page.get_by_text(re.compile(r"^\+?\s*New project$", re.I))
@@ -180,6 +209,11 @@ def generate_video_via_flow_browser(
             if "accounts.google.com" in page.url:
                 raise RuntimeError(
                     "You are not signed in to Google Flow yet. Call `flow_browser_login` first and sign in with your Google email in the Chrome window."
+                )
+            if "/about" in page.url:
+                raise RuntimeError(
+                    f"Still on the Google Flow landing page ({page.url}); could not open the Flow app. "
+                    "Call `flow_browser_login` and finish signing in."
                 )
 
             # 2. Select generation mode if mode dropdown exists (Text to Video / Frames to Video / Ingredients to Video)
@@ -219,20 +253,38 @@ def generate_video_via_flow_browser(
                     file_inputs.first.set_input_files(files_to_upload)
                     time.sleep(4)
 
-            # 4. Fill the prompt textarea
-            textarea = page.locator("textarea").first
-            textarea.wait_for(state="visible", timeout=30000)
+            # 4. Fill the prompt box. Flow's current editor uses a contenteditable
+            # div (role=textbox, "What do you want to create?"); older UIs used a <textarea>.
+            # Note: a hidden reCAPTCHA <textarea> exists on the page, so only match visible ones.
+            prompt_box = page.get_by_role("textbox", name=re.compile(r"what do you want to create", re.I))
+            if prompt_box.count() == 0:
+                prompt_box = page.locator(
+                    'textarea:visible, [contenteditable="true"][role="textbox"]:visible'
+                )
+            prompt_box = prompt_box.first
+            try:
+                prompt_box.wait_for(state="visible", timeout=30000)
+            except Exception:
+                raise RuntimeError(
+                    f"Could not find the Flow prompt box on {page.url}. The Flow UI may have changed."
+                )
 
             existing_videos = page.locator("video").count()
             initial_captured_count = len(captured_video_urls)
 
-            textarea.click()
-            textarea.fill(prompt)
+            # The editor is agent-style, so say explicitly that we want a video.
+            # Flow ignores length unless the prompt states it, so say it explicitly.
+            length = f"{duration}-second " if duration else ""
+            full_prompt = f"Create a {length}video ({aspect_ratio}): {prompt}"
+
+            prompt_box.click()
+            prompt_box.fill(full_prompt)
             time.sleep(1)
 
-            # 5. Click the Generate / Submit button (or press Enter)
+            # 5. Click "Start generation". Avoid loose patterns like "generate"/"create":
+            # they match suggestion chips ("Generate concept art") and "Create collection".
             submitted = False
-            for submit_pattern in [r"generate", r"create", r"submit", r"arrow_forward", r"send"]:
+            for submit_pattern in [r"^start generation$", r"^generate$", r"^submit$", r"^send$"]:
                 gen_btn = page.get_by_role("button", name=re.compile(submit_pattern, re.I))
                 if gen_btn.count() > 0 and gen_btn.last.is_visible() and gen_btn.last.is_enabled():
                     gen_btn.last.click()
@@ -240,63 +292,122 @@ def generate_video_via_flow_browser(
                     break
 
             if not submitted:
-                textarea.press("Enter")
+                prompt_box.press("Enter")
 
-            # 6. Wait for the new video to render or download
+            # 6. Approve the credit charge (Flow's agent asks before each generation),
+            #    then wait for the new video to render.
+            initial_video_srcs = set(_video_srcs(page))
             start_wait = time.time()
             downloaded_file: Optional[str] = None
             final_video_src: Optional[str] = None
+            approved = False
+            credits_cost: Optional[int] = None
 
-            while time.time() - start_wait < timeout_seconds:
-                # Check if a new network MP4 response was captured
-                if len(captured_video_urls) > initial_captured_count:
-                    final_video_src = captured_video_urls[-1]
-                    break
+            try:
+                while time.time() - start_wait < timeout_seconds:
+                    if not approved:
+                        # Click "Approve" for this one generation only, never "Always approve".
+                        approve_btn = page.get_by_role("button", name=re.compile(r"^\W*(check\s*)?approve$", re.I))
+                        if approve_btn.count() > 0 and approve_btn.last.is_visible():
+                            m = re.search(r"costing\s+(\d+)\s+credits", page.inner_text("body"), re.I)
+                            credits_cost = int(m.group(1)) if m else None
+                            approve_btn.last.click()
+                            approved = True
+                            time.sleep(3)
+                            continue
 
-                # Check if a new <video> element appeared with a valid src
-                videos = page.locator("video")
-                if videos.count() > existing_videos:
-                    for idx in range(videos.count() - 1, -1, -1):
-                        v = videos.nth(idx)
-                        src = v.get_attribute("src") or ""
-                        if not src:
-                            source_tag = v.locator("source").first
-                            if source_tag.count() > 0:
-                                src = source_tag.get_attribute("src") or ""
-                        if src and src.startswith("http"):
-                            final_video_src = src
-                            break
-                    if final_video_src:
+                    # A new network MP4 response was captured
+                    if len(captured_video_urls) > initial_captured_count:
+                        final_video_src = captured_video_urls[-1]
                         break
 
-                time.sleep(3)
+                    # Or a new <video> element appeared
+                    new_srcs = [s for s in _video_srcs(page) if s not in initial_video_srcs]
+                    if new_srcs:
+                        final_video_src = new_srcs[-1]
+                        break
 
-            # Save a UI screenshot of the result
-            ui_screenshot = os.path.splitext(output_path)[0] + "_flow_ui.png"
-            page.screenshot(path=ui_screenshot)
+                    time.sleep(3)
 
-            if final_video_src and final_video_src.startswith("http"):
-                # Download via the authenticated browser context
-                resp = context.request.get(final_video_src)
-                if resp.ok:
-                    with open(output_path, "wb") as f:
-                        f.write(resp.body())
-                    downloaded_file = output_path
+                if approved and credits_cost is None:
+                    costs = re.findall(r"costing\s+(\d+)\s+credits", page.inner_text("body"), re.I)
+                    credits_cost = int(costs[-1]) if costs else None
+
+                # Save a UI screenshot of the result
+                ui_screenshot = os.path.splitext(output_path)[0] + "_flow_ui.png"
+                page.screenshot(path=ui_screenshot)
+
+                if final_video_src:
+                    data = _download_video(context, page, final_video_src)
+                    if data:
+                        with open(output_path, "wb") as f:
+                            f.write(data)
+                        downloaded_file = output_path
+            except Exception as e:
+                if "closed" in str(e).lower():
+                    raise RuntimeError(
+                        "The Chrome window was closed before the video finished. "
+                        f"Check the newest project in Google Flow for the clip. (approved={approved})"
+                    )
+                raise
+
+            if downloaded_file:
+                status = "completed"
+                message = f"Video generated with your Google Flow credits and saved to {downloaded_file}"
+            elif approved:
+                status = "timed_out_waiting_for_video"
+                message = (
+                    f"Generation was approved but the video was not ready within {timeout_seconds}s. "
+                    f"It should appear in your Flow project: {page.url}"
+                )
+            else:
+                status = "not_started"
+                message = (
+                    "Prompt was sent but Flow never asked to approve a generation, so no video was started. "
+                    f"See the screenshot: {ui_screenshot}"
+                )
 
             return {
-                "status": "completed" if downloaded_file else "submitted_in_flow_ui",
+                "status": status,
                 "engine": "google_flow_browser_credits",
                 "mode": mode,
-                "prompt": prompt,
+                "prompt": full_prompt,
+                "credits_cost": credits_cost,
                 "output_path": downloaded_file,
                 "ui_screenshot": ui_screenshot,
                 "flow_project_url": page.url,
-                "video_src": final_video_src,
-                "message": (
-                    f"Video generated using your Google Flow account credits and saved to {downloaded_file}"
-                    if downloaded_file
-                    else f"Prompt submitted in your Google Flow browser session ({page.url}). Screenshot saved to {ui_screenshot}."
-                ),
+                "video_src": final_video_src if final_video_src and final_video_src.startswith("http") else None,
+                "message": message,
             }
         finally:
             context.close()
+
+
+def _video_srcs(page: Any) -> List[str]:
+    """Current sources of all <video> elements on the page (handles <source> children and blob: URLs)."""
+    return page.evaluate(
+        """() => [...document.querySelectorAll('video')]
+              .map(v => v.currentSrc || v.src || (v.querySelector('source') || {}).src || '')
+              .filter(Boolean)"""
+    )
+
+
+def _download_video(context: Any, page: Any, src: str) -> Optional[bytes]:
+    """Download a video by URL through the signed-in browser. Supports http(s) and blob: URLs."""
+    if src.startswith("http"):
+        resp = context.request.get(src)
+        return resp.body() if resp.ok else None
+    if src.startswith("blob:"):
+        import base64
+
+        b64 = page.evaluate(
+            """async (u) => {
+                const buf = await (await fetch(u)).arrayBuffer();
+                let s = ''; const bytes = new Uint8Array(buf);
+                for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+                return btoa(s);
+            }""",
+            src,
+        )
+        return base64.b64decode(b64) if b64 else None
+    return None

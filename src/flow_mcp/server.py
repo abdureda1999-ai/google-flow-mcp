@@ -89,6 +89,7 @@ def flow_text_to_video(
             prompt=prompt,
             mode="text_to_video",
             aspect_ratio=aspect_ratio,
+            duration=duration,
             output_path=output_path,
         )
     return generate_flow_video(
@@ -130,6 +131,7 @@ def flow_frames_to_video(
             first_frame=first_frame,
             last_frame=last_frame,
             aspect_ratio=aspect_ratio,
+            duration=duration,
             output_path=output_path,
         )
     return generate_flow_video(
@@ -172,6 +174,7 @@ def flow_reference_to_video(
             mode="reference_to_video",
             reference_images=reference_images,
             aspect_ratio=aspect_ratio,
+            duration=duration,
             output_path=output_path,
         )
     return generate_flow_video(
