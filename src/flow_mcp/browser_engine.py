@@ -18,7 +18,17 @@ import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional
 
-FLOW_URL = "https://flow.google.com/"  # labs.google/fx/tools/flow redirects here
+# hl=en forces English even when the Google account uses another language,
+# so the tool can find buttons like "New project" and "Approve".
+FLOW_URL = "https://flow.google.com/?hl=en"  # labs.google/fx/tools/flow redirects here
+
+
+def _ensure_english(page: Any) -> None:
+    """Reload the current Flow page with hl=en if it isn't already (e.g. after opening a project)."""
+    url = page.url
+    if "flow.google.com" in url and "hl=en" not in url:
+        _goto_flow(page, url + ("&" if "?" in url else "?") + "hl=en")
+        time.sleep(4)
 
 
 def _goto_flow(page: Any, url: str = FLOW_URL) -> None:
@@ -73,11 +83,15 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
         # Keep Chrome's sandbox on (Playwright otherwise passes --no-sandbox).
         chromium_sandbox=True,
         accept_downloads=True,
+        # Force English so button and label matching works for accounts set to other languages.
+        locale="en-US",
+        extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
         viewport={"width": 1440, "height": 900},
         args=[
             "--disable-blink-features=AutomationControlled",
             "--no-first-run",
             "--no-default-browser-check",
+            "--lang=en-US",
         ],
     )
 
@@ -154,7 +168,44 @@ def _credits_after(page: Any, before: Optional[int]) -> Dict[str, Any]:
     except Exception:
         pass
     used = before - after if before is not None and after is not None else None
-    return {"credits_before": before, "credits_after": after, "credits_used": used, "flow_project_url": project_url}
+    account = _signed_in_email(page)
+    return {
+        "credits_before": before,
+        "credits_after": after,
+        "credits_used": used,
+        "flow_account": account,
+        "flow_project_url": _account_link(project_url, account),
+    }
+
+
+def _signed_in_email(page: Any) -> Optional[str]:
+    """Email of the Google account Flow is using, read from the account button's label."""
+    try:
+        labels = page.evaluate(
+            """() => [...document.querySelectorAll('[aria-label]')]
+                  .map(e => e.getAttribute('aria-label'))
+                  .filter(l => /Google Account/i.test(l))"""
+        )
+        for label in labels:
+            m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", label)
+            if m:
+                return m.group(0)
+    except Exception:
+        pass
+    return None
+
+
+def _account_link(url: str, email: Optional[str]) -> str:
+    """Add authuser=<email> so the link opens in the account that made it, even if the
+    browser's default Google account is a different one."""
+    if not email or "flow.google.com" not in url:
+        return url
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query))
+    query["authuser"] = email
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def login_and_verify_flow_session(wait_seconds: int = 120) -> Dict[str, Any]:
@@ -261,6 +312,7 @@ def generate_video_via_flow_browser(
             if new_proj_text.count() > 0 and new_proj_text.first.is_visible():
                 new_proj_text.first.click()
                 time.sleep(4)
+            _ensure_english(page)
 
             # Verify not stuck on Google login
             if "accounts.google.com" in page.url:
@@ -576,6 +628,7 @@ def generate_image_via_flow_browser(
             if new_project.count() > 0 and new_project.first.is_visible():
                 new_project.first.click()
                 time.sleep(5)
+            _ensure_english(page)
 
             if reference_images:
                 files = [os.path.abspath(f) for f in reference_images if os.path.exists(f)]

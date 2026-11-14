@@ -57,6 +57,7 @@ def _has_real_api_key() -> bool:
 
 
 _MAX_INLINE_IMAGE_BYTES = 3 * 1024 * 1024
+IMAGE_WIDGET_URI = "ui://widget/flow-image.html"  # ChatGPT widget that shows images and videos
 
 
 def _public_file_url(path: Optional[str]) -> Optional[str]:
@@ -110,7 +111,13 @@ def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
     return login_and_verify_flow_session(wait_seconds=wait_seconds)
 
 
-@mcp.tool()
+@mcp.tool(
+    meta={
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Generating video in Google Flow...",
+        "openai/toolInvocation/invoked": "Video ready",
+    }
+)
 def flow_text_to_video(
     prompt: str,
     aspect_ratio: str = "16:9",
@@ -147,7 +154,13 @@ def flow_text_to_video(
     )
 
 
-@mcp.tool()
+@mcp.tool(
+    meta={
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Generating video in Google Flow...",
+        "openai/toolInvocation/invoked": "Video ready",
+    }
+)
 def flow_frames_to_video(
     prompt: str,
     first_frame: str,
@@ -191,7 +204,13 @@ def flow_frames_to_video(
     )
 
 
-@mcp.tool()
+@mcp.tool(
+    meta={
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Generating video in Google Flow...",
+        "openai/toolInvocation/invoked": "Video ready",
+    }
+)
 def flow_reference_to_video(
     prompt: str,
     reference_images: Optional[List[str]] = None,
@@ -234,11 +253,10 @@ def flow_reference_to_video(
     )
 
 
-IMAGE_WIDGET_URI = "ui://widget/flow-image.html"
 
 # Small display widget so ChatGPT shows the generated picture inside the chat.
 # It reads the tool result that ChatGPT passes in (window.openai.toolOutput).
-IMAGE_WIDGET_HTML = """
+IMAGE_WIDGET_HTML = r"""
 <div id="flow-root" style="font-family: system-ui, sans-serif; color: inherit;"></div>
 <script>
 (function () {
@@ -252,15 +270,22 @@ IMAGE_WIDGET_HTML = """
       return;
     }
     root.innerHTML = "";
-    var img = document.createElement("img");
+    var isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url) || /video/i.test(r.mode || "");
+    var img = document.createElement(isVideo ? "video" : "img");
     img.src = url;
-    img.alt = "Generated image";
+    if (isVideo) {
+      img.controls = true;
+      img.playsInline = true;
+      img.loop = true;
+    } else {
+      img.alt = "Generated image";
+    }
     img.style.cssText = "display:block;max-width:100%;max-height:640px;border-radius:12px;margin:0 auto;";
     var link = document.createElement("a");
     link.href = url;
     link.target = "_blank";
     link.rel = "noopener";
-    link.textContent = "Download image";
+    link.textContent = isVideo ? "Download video" : "Download image";
     link.style.cssText = "display:block;text-align:center;margin-top:8px;font-size:14px;color:inherit;";
     root.appendChild(img);
     root.appendChild(link);
@@ -277,7 +302,7 @@ IMAGE_WIDGET_HTML = """
     name="flow-image-widget",
     mime_type="text/html+skybridge",
     meta={
-        "openai/widgetDescription": "Shows the image generated in Google Flow with a download link.",
+        "openai/widgetDescription": "Shows the image or video generated in Google Flow with a download link.",
         "openai/widgetCSP": {"resource_domains": ["https://*.trycloudflare.com"], "connect_domains": []},
     },
 )

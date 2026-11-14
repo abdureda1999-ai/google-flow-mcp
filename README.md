@@ -165,6 +165,9 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 
 ## 🛠 Troubleshooting
 
+- **Use a different Google account for Flow**: move `~/.google-flow-mcp/chrome-profile` aside (for example rename it to `chrome-profile-backup`), then run `flow_browser_login` (or `.venv/bin/python examples/sign_in.py`) and sign in with the other account. Results include `flow_account`, and Flow links carry `authuser=` so they open in that account.
+- **Flow in another language**: the tool always opens Flow in English (`hl=en`), so accounts set to Arabic or other languages work.
+
 - **"Still on the Google Flow landing page"**: run `flow_browser_login` and finish signing in.
 - **"Could not find the Flow prompt box"**: Flow's website changed. Please open an issue.
 - **Chrome says the profile is in use**: close any Chrome window the tool left open, then try again.
