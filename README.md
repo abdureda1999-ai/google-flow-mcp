@@ -28,7 +28,7 @@ The video and image tools use your Flow sign-in by default. If you set `GEMINI_A
 3. Flow asks before spending credits (for example *"costing 30 credits?"*). The tool clicks **Approve** for that one generation only, never "Always approve", and returns the cost as `credits_cost`. The tools also read your credit balance before and after, and report `credits_used`, `credits_before` and `credits_after`.
 4. Waits for the result (up to 10 minutes for video, 4 for images), then saves it to your media folder. Images are saved at full size, not Flow's small preview. If the page misses the finished image, the tool reloads the project to find it.
 
-**No window pops up.** Generation runs in a Chrome window placed off-screen, so it stays signed in without showing up on your screen. Set `FLOW_SHOW_BROWSER=1` to watch it work. Only `flow_browser_login` shows a window, so you can sign in.
+**Runs in the background.** Generation uses a minimized Chrome window (only its Dock icon shows), so it stays signed in without getting in your way. Set `FLOW_SHOW_BROWSER=1` to watch it work. Only `flow_browser_login` shows a window, so you can sign in.
 
 ---
 

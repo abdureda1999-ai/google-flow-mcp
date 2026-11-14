@@ -86,8 +86,19 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
 
     # Google signs out real headless Chrome, so "hidden" runs use a normal Chrome window
     # placed far off-screen instead. It stays signed in but never shows on your screen.
-    hidden_args = ["--window-position=-32000,-32000", "--window-size=1440,900"] if headless else []
-    return playwright.chromium.launch_persistent_context(
+    hidden_args = (
+        [
+            "--window-position=-32000,-32000",
+            "--window-size=1440,900",
+            # Keep the page running at full speed while minimized.
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+        ]
+        if headless
+        else []
+    )
+    context = playwright.chromium.launch_persistent_context(
         user_data_dir=profile_dir,
         channel="chrome",
         headless=False,
@@ -106,6 +117,23 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
             *hidden_args,
         ],
     )
+    if headless:
+        # macOS pulls off-screen windows back onto the screen, so also minimize the window
+        # (and any tab Flow or the tool opens later) to keep it out of sight.
+        for pg in context.pages:
+            _minimize_window(context, pg)
+        context.on("page", lambda pg: _minimize_window(context, pg))
+    return context
+
+
+def _minimize_window(context: Any, page: Any) -> None:
+    try:
+        cdp = context.new_cdp_session(page)
+        window_id = cdp.send("Browser.getWindowForTarget")["windowId"]
+        cdp.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "minimized"}})
+        cdp.detach()
+    except Exception:
+        pass
 
 
 _LANDING_CTA_RE = re.compile(r"create with (google )?flow|get started|start creating", re.I)
