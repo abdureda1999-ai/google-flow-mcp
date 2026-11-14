@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 import urllib.request
 import uuid
@@ -65,6 +66,13 @@ def _slugify(text: str) -> str:
     return slug[:45] or "flow_output"
 
 
+def _want_headless(headless: Optional[bool]) -> bool:
+    """Generation runs hidden (no Chrome window) unless FLOW_SHOW_BROWSER=1 or headless=False is passed."""
+    if headless is not None:
+        return headless
+    return os.getenv("FLOW_SHOW_BROWSER", "").strip().lower() not in ("1", "true", "yes")
+
+
 def _launch_persistent_context(playwright: Any, headless: bool = False):
     """Launches Google Chrome with the persistent user profile."""
     profile_dir = get_profile_dir()
@@ -76,10 +84,13 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
         except OSError:
             pass
 
+    # Google signs out real headless Chrome, so "hidden" runs use a normal Chrome window
+    # placed far off-screen instead. It stays signed in but never shows on your screen.
+    hidden_args = ["--window-position=-32000,-32000", "--window-size=1440,900"] if headless else []
     return playwright.chromium.launch_persistent_context(
         user_data_dir=profile_dir,
         channel="chrome",
-        headless=headless,
+        headless=False,
         # Keep Chrome's sandbox on (Playwright otherwise passes --no-sandbox).
         chromium_sandbox=True,
         accept_downloads=True,
@@ -92,6 +103,7 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
             "--no-first-run",
             "--no-default-browser-check",
             "--lang=en-US",
+            *hidden_args,
         ],
     )
 
@@ -123,7 +135,18 @@ def _is_in_flow_workspace(page: Any) -> bool:
     has_textarea = page.locator("textarea:visible").count() > 0
     new_project = page.get_by_text(re.compile(r"new project", re.I))
     has_new_project = new_project.count() > 0 and new_project.first.is_visible()
-    return has_textarea or has_new_project
+    if has_textarea or has_new_project:
+        return True
+    # Works in any language: Flow's account button label contains the signed-in email.
+    try:
+        return "flow.google.com" in url and bool(
+            page.evaluate(
+                """() => [...document.querySelectorAll('[aria-label]')]
+                      .some(e => /[\\w.+-]+@[\\w-]+\\.[\\w.-]+/.test(e.getAttribute('aria-label')))"""
+            )
+        )
+    except Exception:
+        return False
 
 
 def _read_credit_balance(page: Any) -> Optional[int]:
@@ -232,6 +255,9 @@ def login_and_verify_flow_session(wait_seconds: int = 120) -> Dict[str, Any]:
                     if _is_in_flow_workspace(page):
                         logged_in = True
                         break
+                    # After sign-in Google often returns to Flow's welcome page: click through it.
+                    if "flow.google.com" in page.url and int(time.time() - start_time) % 10 < 2:
+                        _click_landing_cta(page)
                 except Exception:
                     # Page may be mid-navigation during sign-in; keep waiting.
                     pass
@@ -265,7 +291,7 @@ def generate_video_via_flow_browser(
     duration: Optional[int] = None,
     output_path: Optional[str] = None,
     timeout_seconds: int = 600,
-    headless: bool = False,
+    headless: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Automates the live Google Flow web UI (`labs.google/fx/tools/flow`) using your logged-in
     Google account and AI credits (no API key needed)."""
@@ -291,7 +317,7 @@ def generate_video_via_flow_browser(
             pass
 
     with sync_playwright() as p:
-        context = _launch_persistent_context(p, headless=headless)
+        context = _launch_persistent_context(p, headless=_want_headless(headless))
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.on("response", _on_response)
@@ -570,6 +596,42 @@ def _flow_images(page: Any) -> List[Dict[str, Any]]:
     )
 
 
+def _project_images_fresh(context: Any, project_url: str) -> List[str]:
+    """Load the project in a separate tab and list its images. Works even when the live page
+    missed the update, was reloaded, or closed (seen with Flow's direct Nano Banana mode)."""
+    checker = context.new_page()
+    try:
+        checker.goto(project_url, wait_until="domcontentloaded", timeout=60000)
+        deadline = time.time() + 15
+        imgs: List[str] = []
+        while time.time() < deadline:
+            imgs = [i["src"] for i in _flow_images(checker)]
+            if imgs:
+                break
+            time.sleep(1.5)
+        return imgs
+    except Exception:
+        return []
+    finally:
+        try:
+            checker.close()
+        except Exception:
+            pass
+
+
+def _live_page(context: Any, page: Any, project_url: Optional[str]) -> Any:
+    """Return an open page, reopening the project if Flow closed the tab we were watching."""
+    if not page.is_closed():
+        return page
+    for other in reversed(context.pages):
+        if not other.is_closed():
+            return other
+    fresh = context.new_page()
+    if project_url:
+        fresh.goto(project_url, wait_until="domcontentloaded", timeout=60000)
+    return fresh
+
+
 def _full_size_image_url(src: str) -> str:
     """Flow shows a small preview (e.g. `=s512-rw`); `=s0` asks for the original size."""
     base = re.sub(r"=[^/=]*$", "", src)
@@ -599,8 +661,8 @@ def generate_image_via_flow_browser(
     aspect_ratio: str = "16:9",
     reference_images: Optional[List[str]] = None,
     output_path: Optional[str] = None,
-    timeout_seconds: int = 420,
-    headless: bool = False,
+    timeout_seconds: int = 240,
+    headless: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Generate an image in Google Flow with your signed-in account and credits (no API key).
 
@@ -614,7 +676,7 @@ def generate_image_via_flow_browser(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     with sync_playwright() as p:
-        context = _launch_persistent_context(p, headless=headless)
+        context = _launch_persistent_context(p, headless=_want_headless(headless))
         try:
             page = context.pages[0] if context.pages else context.new_page()
             _goto_flow(page)
@@ -657,9 +719,16 @@ def generate_image_via_flow_browser(
             approved = False
             credits_cost: Optional[int] = None
             found: Optional[str] = None
+            project_url: Optional[str] = page.url if "/project/" in page.url else None
+            saved: Optional[str] = None
+            ui_screenshot = os.path.splitext(output_path)[0] + "_flow_ui.png"
             start = time.time()
-            try:
-                while time.time() - start < timeout_seconds:
+            last_fresh_check = start
+            while time.time() - start < timeout_seconds:
+                try:
+                    page = _live_page(context, page, project_url)
+                    if not project_url and "/project/" in page.url:
+                        project_url = page.url.split("?")[0]
                     if not approved:
                         approve = page.get_by_role("radio", name="Approve", exact=True)
                         if approve.count() > 0 and approve.last.is_visible():
@@ -673,36 +742,44 @@ def generate_image_via_flow_browser(
                     if new:
                         found = new[-1]
                         break
-                    time.sleep(3)
+                except Exception:
+                    pass  # page mid-reload or closed; the fresh check below still works
+                # Every 25s, also load the project in its own tab: the live page sometimes never shows
+                # the finished image (Flow's direct Nano Banana mode), but a fresh load does.
+                if project_url and time.time() - last_fresh_check > 25:
+                    last_fresh_check = time.time()
+                    new = [src for src in _project_images_fresh(context, project_url) if src not in before]
+                    if new:
+                        found = new[0]
+                        break
+                time.sleep(3)
 
-                ui_screenshot = os.path.splitext(output_path)[0] + "_flow_ui.png"
+            try:
+                page = _live_page(context, page, project_url)
                 page.screenshot(path=ui_screenshot)
-
-                saved: Optional[str] = None
-                if found:
-                    got = _download_flow_image(context, found)
-                    if got:
-                        data, ctype = got
-                        saved = os.path.splitext(output_path)[0] + _ext_for(ctype)
-                        with open(saved, "wb") as f:
-                            f.write(data)
-            except Exception as e:
-                if "closed" in str(e).lower():
-                    raise RuntimeError(
-                        "The Chrome window was closed before the image finished. "
-                        "Check the newest project in Google Flow for the image."
-                    )
-                raise
+            except Exception:
+                pass
+            if found:
+                got = _download_flow_image(context, found)
+                if got:
+                    data, ctype = got
+                    saved = os.path.splitext(output_path)[0] + _ext_for(ctype)
+                    with open(saved, "wb") as f:
+                        f.write(data)
 
             if saved:
                 status, message = "completed", f"Image generated with your Google Flow credits and saved to {saved}"
             elif found:
-                status, message = "download_failed", f"Image was generated but could not be downloaded. See {page.url}"
+                status, message = "download_failed", f"Image was generated but could not be downloaded. See {project_url or page.url}"
             else:
                 status = "timed_out_waiting_for_image"
-                message = f"No image appeared within {timeout_seconds}s. See {page.url} and {ui_screenshot}"
+                message = f"No image appeared within {timeout_seconds}s. It may still finish in {project_url or page.url}"
 
-            credit_info = _credits_after(page, credits_before)
+            try:
+                credit_info = _credits_after(page, credits_before)
+            except Exception:
+                credit_info = {"credits_before": credits_before, "credits_after": None, "credits_used": None,
+                               "flow_account": None, "flow_project_url": project_url}
             if credit_info["credits_used"] is not None:
                 credits_cost = credit_info["credits_used"]
             return {

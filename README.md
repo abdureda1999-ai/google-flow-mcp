@@ -26,9 +26,9 @@ The video and image tools use your Flow sign-in by default. If you set `GEMINI_A
 1. Opens Flow in Chrome with a saved profile, so you stay signed in.
 2. Creates a new project, types your prompt, and starts the generation.
 3. Flow asks before spending credits (for example *"costing 30 credits?"*). The tool clicks **Approve** for that one generation only, never "Always approve", and returns the cost as `credits_cost`. The tools also read your credit balance before and after, and report `credits_used`, `credits_before` and `credits_after`.
-4. Waits for the result (up to 10 minutes for video, 7 for images), then saves it to your media folder. Images are saved at full size, not Flow's small preview.
+4. Waits for the result (up to 10 minutes for video, 4 for images), then saves it to your media folder. Images are saved at full size, not Flow's small preview. If the page misses the finished image, the tool reloads the project to find it.
 
-**Leave the Chrome window open until the tool finishes.** Closing it stops the download, but the clip may still finish in your Flow project.
+**No window pops up.** Generation runs in a Chrome window placed off-screen, so it stays signed in without showing up on your screen. Set `FLOW_SHOW_BROWSER=1` to watch it work. Only `flow_browser_login` shows a window, so you can sign in.
 
 ---
 
@@ -161,6 +161,7 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 | `GEMINI_API_KEY` | not set | Turns on the API-only tools. |
 | `FLOW_HOST` / `FLOW_PORT` | `127.0.0.1` / `8000` | Address for the HTTP transports. |
 | `FLOW_SECRET` | random each start | Secret part of the ChatGPT link. |
+| `FLOW_SHOW_BROWSER` | not set | Set to `1` to show the Chrome window while generating. |
 | `FLOW_PUBLIC_URL` | not set | Your own public address (for example a named Cloudflare tunnel) so the ChatGPT link stays the same. With it, no quick tunnel is started. |
 
 ## 🛠 Troubleshooting
