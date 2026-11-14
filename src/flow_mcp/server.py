@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Google Flow MCP Server & OpenAPI Bridge.
 
-Supports:
-1. Claude Desktop / Claude Code / Antigravity (`stdio` transport)
-2. ChatGPT MCP Connectors (`sse` / `streamable-http` transport)
-3. ChatGPT Custom GPT Actions (`openapi` FastAPI REST server with `/openapi.json`)
+Works in TWO ways:
+1. ZERO API KEY (Default when GEMINI_API_KEY is not set):
+   Uses your logged-in Google email & Google AI Ultra / Pro credits directly on
+   `https://labs.google/fx/tools/flow` via a persistent Chrome browser profile!
+2. GEMINI API ENGINE (Optional when GEMINI_API_KEY is set):
+   Calls `gemini-omni-1.2-flash` and `gemini-nano-banana-2.1` directly via the SDK.
 """
 
 from __future__ import annotations
@@ -19,6 +21,10 @@ except ImportError:
     from mcp.server.fastmcp import FastMCP  # type: ignore
 from pydantic import BaseModel, Field
 
+from flow_mcp.browser_engine import (
+    generate_video_via_flow_browser,
+    login_and_verify_flow_session,
+)
 from flow_mcp.engine import (
     DEFAULT_DIRECTOR_MODEL,
     DEFAULT_IMAGE_MODEL,
@@ -26,49 +32,36 @@ from flow_mcp.engine import (
     generate_flow_video,
     generate_frame_image,
     generate_storyboard_plan,
+    get_api_key,
 )
 
 mcp = FastMCP(
-    "google-flow-mcp",
+    "google-flow",
     instructions=(
         "Google Flow AI Filmmaking & Creative Studio MCP Server. "
-        "Use `flow_storyboard_director` to plan shots, `flow_generate_frame` (Nano Banana 2.1 / Whisk fusion) "
-        "to generate or fuse reference frames, and `flow_text_to_video`, `flow_frames_to_video`, "
-        "`flow_reference_to_video`, or `flow_extend_or_edit_video` (Gemini Omni 1.2 Flash) to produce video."
+        "Supports BOTH zero-API-key browser mode (using the user's logged-in Google email and Google Flow "
+        "subscription credits at labs.google/fx/tools/flow) AND optional Gemini API mode. "
+        "If the user has not logged into the Flow browser profile yet, call `flow_browser_login` once."
     ),
 )
 
 
+def _has_real_api_key() -> bool:
+    key = get_api_key()
+    if not key:
+        return False
+    placeholders = {"your_gemini_api_key", "your_api_key_here", "none", ""}
+    return key.strip().lower() not in placeholders
+
+
 @mcp.tool()
-def flow_generate_frame(
-    prompt: str,
-    reference_images: Optional[List[str]] = None,
-    aspect_ratio: str = "16:9",
-    image_size: str = "2K",
-    model: str = DEFAULT_IMAGE_MODEL,
-    previous_interaction_id: Optional[str] = None,
-    output_path: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Generate a starting frame, ending keyframe, or Whisk-style reference fusion image.
+def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
+    """Open Google Flow (`https://labs.google/fx/tools/flow`) in a visible Chrome window to sign in with your Google email and use your Flow subscription credits (NO API key required).
 
     Args:
-        prompt: Detailed visual description of the frame or edit instruction.
-        reference_images: Optional list of up to 14 local image paths or Gemini File URIs to fuse (product, style, character, lighting).
-        aspect_ratio: Aspect ratio ('16:9', '9:16', '1:1', '4:3', '3:4'). Default '16:9'.
-        image_size: Output resolution ('1K', '2K', '4K'). Default '2K'.
-        model: Gemini image model ('gemini-nano-banana-2.1', 'gemini-3-pro-image', or 'gemini-3.1-flash-lite-image').
-        previous_interaction_id: Optional interaction ID from a prior turn for conversational editing.
-        output_path: Optional custom local file path for saving the PNG image.
+        wait_seconds: Seconds to wait for you to sign in before returning status (default 120).
     """
-    return generate_frame_image(
-        prompt=prompt,
-        reference_images=reference_images,
-        aspect_ratio=aspect_ratio,
-        image_size=image_size,
-        model=model,
-        previous_interaction_id=previous_interaction_id,
-        output_path=output_path,
-    )
+    return login_and_verify_flow_session(wait_seconds=wait_seconds)
 
 
 @mcp.tool()
@@ -78,16 +71,26 @@ def flow_text_to_video(
     duration: int = 10,
     resolution: str = "720p",
     output_path: Optional[str] = None,
+    use_browser_credits: bool = True,
 ) -> Dict[str, Any]:
-    """Generate a commercial or cinematic video from a text prompt using Google Flow (Gemini Omni 1.2 Flash).
+    """Generate a video from a text prompt using Google Flow.
+    By default (`use_browser_credits=True` or when no API key is set), uses your logged-in Google Flow email and subscription credits at `labs.google/fx/tools/flow`.
 
     Args:
-        prompt: Detailed scene, camera motion, lighting, and sound design prompt. Use '[0-5s] ... [5-10s] ...' for timed shots, or 'In a single continuous shot' for unbroken camera movement.
+        prompt: Detailed scene, camera motion, lighting, and sound design prompt.
         aspect_ratio: '16:9' (landscape) or '9:16' (vertical/reels). Default '16:9'.
-        duration: Video length in seconds (integer from 3 to 15, default 10).
+        duration: Video length in seconds (3 to 15, default 10).
         resolution: Output resolution ('360p', '720p', '1080p', '4k'). Default '720p'.
         output_path: Optional local file path to save the generated MP4.
+        use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits without needing an API key.
     """
+    if use_browser_credits or not _has_real_api_key():
+        return generate_video_via_flow_browser(
+            prompt=prompt,
+            mode="text_to_video",
+            aspect_ratio=aspect_ratio,
+            output_path=output_path,
+        )
     return generate_flow_video(
         prompt=prompt,
         aspect_ratio=aspect_ratio,
@@ -106,18 +109,29 @@ def flow_frames_to_video(
     duration: int = 10,
     resolution: str = "720p",
     output_path: Optional[str] = None,
+    use_browser_credits: bool = True,
 ) -> Dict[str, Any]:
-    """Animate a starting image frame or interpolate smoothly between a starting frame and an ending frame.
+    """Animate a starting image frame or interpolate smoothly between a starting frame and an ending frame in Google Flow.
 
     Args:
         prompt: Description of the camera motion, action, transition, and sound design.
-        first_frame: Local file path or Gemini File URI for the starting frame.
-        last_frame: Optional local file path or Gemini File URI for the ending frame (pass the same path as first_frame for a seamless loop).
+        first_frame: Local file path for the starting frame.
+        last_frame: Optional local file path for the ending frame.
         aspect_ratio: '16:9' or '9:16'. Default '16:9'.
-        duration: Duration in seconds (3 to 15s for first-frame only; 3 to 10s when both first_frame and last_frame are provided).
+        duration: Duration in seconds (default 10).
         resolution: '360p', '720p', '1080p', or '4k'. Default '720p'.
         output_path: Optional local file path to save the generated MP4.
+        use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits without needing an API key.
     """
+    if use_browser_credits or not _has_real_api_key():
+        return generate_video_via_flow_browser(
+            prompt=prompt,
+            mode="frames_to_video",
+            first_frame=first_frame,
+            last_frame=last_frame,
+            aspect_ratio=aspect_ratio,
+            output_path=output_path,
+        )
     return generate_flow_video(
         prompt=prompt,
         first_frame=first_frame,
@@ -138,18 +152,28 @@ def flow_reference_to_video(
     duration: int = 10,
     resolution: str = "720p",
     output_path: Optional[str] = None,
+    use_browser_credits: bool = True,
 ) -> Dict[str, Any]:
-    """Generate a new video guided by reference images (product, character, style) and/or reference motion videos (Flow Ingredients / R2V).
+    """Generate a new video guided by reference images (product, character, style) in Google Flow (Ingredients to Video).
 
     Args:
-        prompt: Natural-language prompt describing how the reference images/videos should be combined in the scene.
-        reference_images: Up to 6 local image paths or Gemini File URIs.
-        reference_videos: Up to 3 reference video paths (~3s clips) for 3s-10s outputs, or max 1 for 11s-15s outputs.
+        prompt: Natural-language prompt describing how the reference images should be combined in the scene.
+        reference_images: List of local image paths to use as ingredients/references.
+        reference_videos: Optional reference video paths (API mode).
         aspect_ratio: '16:9' or '9:16'. Default '16:9'.
-        duration: Duration in seconds (3 to 15, default 10).
+        duration: Duration in seconds (default 10).
         resolution: '360p', '720p', '1080p', or '4k'. Default '720p'.
         output_path: Optional local file path to save the generated MP4.
+        use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits.
     """
+    if use_browser_credits or not _has_real_api_key():
+        return generate_video_via_flow_browser(
+            prompt=prompt,
+            mode="reference_to_video",
+            reference_images=reference_images,
+            aspect_ratio=aspect_ratio,
+            output_path=output_path,
+        )
     return generate_flow_video(
         prompt=prompt,
         reference_images=reference_images,
@@ -157,6 +181,38 @@ def flow_reference_to_video(
         aspect_ratio=aspect_ratio,
         duration=duration,
         resolution=resolution,
+        output_path=output_path,
+    )
+
+
+@mcp.tool()
+def flow_generate_frame(
+    prompt: str,
+    reference_images: Optional[List[str]] = None,
+    aspect_ratio: str = "16:9",
+    image_size: str = "2K",
+    model: str = DEFAULT_IMAGE_MODEL,
+    previous_interaction_id: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Generate a starting frame, ending keyframe, or Whisk-style reference fusion image.
+
+    Args:
+        prompt: Detailed visual description of the frame or edit instruction.
+        reference_images: Optional list of up to 14 local image paths to fuse.
+        aspect_ratio: Aspect ratio ('16:9', '9:16', '1:1'). Default '16:9'.
+        image_size: Output resolution ('1K', '2K', '4K'). Default '2K'.
+        model: Gemini image model ('gemini-nano-banana-2.1' or 'gemini-3-pro-image').
+        previous_interaction_id: Optional interaction ID from a prior turn.
+        output_path: Optional custom local file path for saving the PNG image.
+    """
+    return generate_frame_image(
+        prompt=prompt,
+        reference_images=reference_images,
+        aspect_ratio=aspect_ratio,
+        image_size=image_size,
+        model=model,
+        previous_interaction_id=previous_interaction_id,
         output_path=output_path,
     )
 
@@ -174,20 +230,7 @@ def flow_extend_or_edit_video(
     strip_audio: bool = False,
     output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Extend a video scene (by 3s-10s, up to 30s cumulative) or edit an existing video's style, lighting, or objects.
-
-    Args:
-        prompt: For 'extend', describe how the action and audio continue. For 'edit', state the change simply and end with 'Keep everything else the same.'
-        mode: 'extend' (continue the scene) or 'edit' (modify existing video).
-        source_video: Local video path or Gemini File URI to extend or edit (optional if previous_interaction_id is used).
-        previous_interaction_id: Optional interaction ID from a previous generation for turn-by-turn editing or extension without re-uploading.
-        reference_images: Optional list of up to 6 reference images to introduce into the extended or edited scene.
-        duration: Duration in seconds (3 to 10s for extensions; 3 to 15s for edits).
-        aspect_ratio: '16:9' or '9:16'.
-        resolution: '360p', '720p', '1080p', or '4k'.
-        strip_audio: Set True when editing if you want Gemini Omni Flash to regenerate all audio from scratch instead of keeping original audio.
-        output_path: Optional local file path to save the resulting MP4.
-    """
+    """Extend a video scene (by 3s-10s, up to 30s cumulative) or edit an existing video's style, lighting, or objects."""
     clean_mode = mode.strip().lower()
     if clean_mode not in {"extend", "edit"}:
         raise ValueError("mode must be 'extend' or 'edit'.")
@@ -214,15 +257,7 @@ def flow_storyboard_director(
     aspect_ratio: str = "16:9",
     model: str = DEFAULT_DIRECTOR_MODEL,
 ) -> Dict[str, Any]:
-    """AI Creative Director that turns a brief or product photo into structured Google Flow frame + video prompts.
-
-    Args:
-        concept: Brand campaign concept, product description, or creative brief.
-        num_shots: Number of shots to plan in the storyboard (default 3).
-        reference_images: Optional product or moodboard image paths to analyze.
-        aspect_ratio: Target aspect ratio ('16:9' or '9:16').
-        model: Reasoning model to use (default 'gemini-4-hydrogen').
-    """
+    """AI Creative Director that turns a brief or product photo into structured Google Flow frame + video prompts."""
     return generate_storyboard_plan(
         concept=concept,
         num_shots=num_shots,
@@ -249,15 +284,17 @@ class TextToVideoRequest(BaseModel):
     aspect_ratio: str = Field("16:9", description="16:9 or 9:16.")
     duration: int = Field(10, ge=3, le=15, description="Duration in seconds (3-15).")
     resolution: str = Field("720p", description="360p, 720p, 1080p, or 4k.")
+    use_browser_credits: bool = Field(True, description="Use logged-in Google Flow web session & credits (no API key required).")
 
 
 class FramesToVideoRequest(BaseModel):
     prompt: str = Field(..., description="Camera motion and transition prompt.")
-    first_frame: str = Field(..., description="Path or File URI for starting frame.")
-    last_frame: Optional[str] = Field(None, description="Optional path or File URI for ending frame (3-10s max).")
+    first_frame: str = Field(..., description="Path for starting frame.")
+    last_frame: Optional[str] = Field(None, description="Optional path for ending frame.")
     aspect_ratio: str = Field("16:9", description="16:9 or 9:16.")
     duration: int = Field(10, ge=3, le=15, description="Duration in seconds.")
     resolution: str = Field("720p", description="360p, 720p, 1080p, or 4k.")
+    use_browser_credits: bool = Field(True, description="Use logged-in Google Flow web session & credits (no API key required).")
 
 
 class StoryboardRequest(BaseModel):
@@ -272,12 +309,19 @@ def create_openapi_app():
 
     app = FastAPI(
         title="Google Flow Studio API (ChatGPT & Claude Bridge)",
-        version="0.1.0",
+        version="0.2.0",
         description=(
             "OpenAPI bridge for ChatGPT Custom GPT Actions and REST clients to trigger "
-            "Google Flow video generation (Gemini Omni 1.2 Flash) and image frame fusion (Nano Banana 2.1)."
+            "Google Flow video generation using your logged-in Google Flow browser credits (no API key required) or Gemini API."
         ),
     )
+
+    @app.post("/flow/browser-login", operation_id="flowBrowserLogin")
+    def api_browser_login():
+        try:
+            return flow_browser_login(wait_seconds=120)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     @app.post("/flow/generate-frame", operation_id="flowGenerateFrame")
     def api_generate_frame(req: FrameRequest):
@@ -300,6 +344,7 @@ def create_openapi_app():
                 aspect_ratio=req.aspect_ratio,
                 duration=req.duration,
                 resolution=req.resolution,
+                use_browser_credits=req.use_browser_credits,
             )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -314,6 +359,7 @@ def create_openapi_app():
                 aspect_ratio=req.aspect_ratio,
                 duration=req.duration,
                 resolution=req.resolution,
+                use_browser_credits=req.use_browser_credits,
             )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
