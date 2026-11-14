@@ -1,6 +1,6 @@
 # 🎬 Google Flow MCP Server (`google-flow-mcp`)
 
-Use **Google Flow** (Google's AI video studio at [flow.google.com](https://flow.google.com)) from **Claude Desktop**, **Claude Code**, and **ChatGPT**.
+Use **Google Flow** (Google's AI video studio at [flow.google.com](https://flow.google.com)) from **Claude Desktop**, **Claude Code**, **ChatGPT**, and **Gemini CLI**.
 
 Plan a shot with your assistant, then ask it to generate the video. The server drives Flow with **your own Google account and Flow credits**, so you don't need an API key.
 
@@ -104,6 +104,30 @@ In ChatGPT, open **Settings → Connectors → Advanced → Developer mode**, ad
 Expose it with `ngrok http 8000`, then in **Create a GPT → Configure → Actions → Import from URL** paste `https://YOUR-TUNNEL.ngrok-free.app/openapi.json`.
 
 > 🔒 Anyone with your tunnel URL can use your Flow credits. Don't share the URL, and stop the tunnel when you're done.
+
+---
+
+## ♊ Connect to Gemini CLI
+
+Add the server to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "google-flow": {
+      "command": "/ABSOLUTE/PATH/TO/google-flow-mcp/.venv/bin/google-flow-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "FLOW_MEDIA_DIR": "/ABSOLUTE/PATH/TO/google-flow-mcp/media"
+      }
+    }
+  }
+}
+```
+
+Restart `gemini`, run `/mcp` to check that `google-flow` is listed, then ask it to run `flow_browser_login`.
+
+> The Gemini web and mobile apps don't support custom MCP servers like this one, so use Gemini CLI.
 
 ---
 

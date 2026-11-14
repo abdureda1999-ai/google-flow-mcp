@@ -306,8 +306,12 @@ def generate_video_via_flow_browser(
             try:
                 while time.time() - start_wait < timeout_seconds:
                     if not approved:
-                        # Click "Approve" for this one generation only, never "Always approve".
-                        approve_btn = page.get_by_role("button", name=re.compile(r"^\W*(check\s*)?approve$", re.I))
+                        # Click "Approve" for this one generation only, never "Always approve in project".
+                        # Flow renders the choices as role="radio" with aria-label "Approve"; exact match
+                        # keeps "Always approve in project" out. Fall back to a button for older UIs.
+                        approve_btn = page.get_by_role("radio", name="Approve", exact=True)
+                        if approve_btn.count() == 0:
+                            approve_btn = page.get_by_role("button", name="Approve", exact=True)
                         if approve_btn.count() > 0 and approve_btn.last.is_visible():
                             m = re.search(r"costing\s+(\d+)\s+credits", page.inner_text("body"), re.I)
                             credits_cost = int(m.group(1)) if m else None
