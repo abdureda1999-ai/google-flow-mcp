@@ -234,7 +234,64 @@ def flow_reference_to_video(
     )
 
 
-@mcp.tool()
+IMAGE_WIDGET_URI = "ui://widget/flow-image.html"
+
+# Small display widget so ChatGPT shows the generated picture inside the chat.
+# It reads the tool result that ChatGPT passes in (window.openai.toolOutput).
+IMAGE_WIDGET_HTML = """
+<div id="flow-root" style="font-family: system-ui, sans-serif; color: inherit;"></div>
+<script>
+(function () {
+  function render() {
+    var root = document.getElementById("flow-root");
+    var out = (window.openai && window.openai.toolOutput) || {};
+    var r = out.result || out;
+    var url = r.download_url;
+    if (!url) {
+      root.textContent = r.message || "Generating image in Google Flow...";
+      return;
+    }
+    root.innerHTML = "";
+    var img = document.createElement("img");
+    img.src = url;
+    img.alt = "Generated image";
+    img.style.cssText = "display:block;max-width:100%;max-height:640px;border-radius:12px;margin:0 auto;";
+    var link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "Download image";
+    link.style.cssText = "display:block;text-align:center;margin-top:8px;font-size:14px;color:inherit;";
+    root.appendChild(img);
+    root.appendChild(link);
+  }
+  window.addEventListener("openai:set_globals", render);
+  render();
+})();
+</script>
+"""
+
+
+@mcp.resource(
+    IMAGE_WIDGET_URI,
+    name="flow-image-widget",
+    mime_type="text/html+skybridge",
+    meta={
+        "openai/widgetDescription": "Shows the image generated in Google Flow with a download link.",
+        "openai/widgetCSP": {"resource_domains": ["https://*.trycloudflare.com"], "connect_domains": []},
+    },
+)
+def flow_image_widget() -> str:
+    return IMAGE_WIDGET_HTML
+
+
+@mcp.tool(
+    meta={
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Generating image in Google Flow...",
+        "openai/toolInvocation/invoked": "Image ready",
+    }
+)
 def flow_generate_frame(
     prompt: str,
     reference_images: Optional[List[str]] = None,
@@ -504,7 +561,11 @@ def run_chatgpt_mode(port: int) -> None:
 
     token = os.environ.get("FLOW_SECRET") or secrets.token_urlsafe(18)
     path = f"/{token}/mcp"
-    proc, public_url = _start_cloudflare_tunnel(port)
+    # FLOW_PUBLIC_URL: use your own tunnel/domain (e.g. a named Cloudflare tunnel) instead of a new quick tunnel.
+    public_url = (os.environ.get("FLOW_PUBLIC_URL") or "").rstrip("/") or None
+    proc = None
+    if not public_url:
+        proc, public_url = _start_cloudflare_tunnel(port)
 
     bar = "=" * 72
     print(bar, file=sys.stderr)

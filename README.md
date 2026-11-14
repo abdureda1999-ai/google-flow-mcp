@@ -147,6 +147,7 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 | `GEMINI_API_KEY` | not set | Turns on the API-only tools. |
 | `FLOW_HOST` / `FLOW_PORT` | `127.0.0.1` / `8000` | Address for the HTTP transports. |
 | `FLOW_SECRET` | random each start | Secret part of the ChatGPT link. |
+| `FLOW_PUBLIC_URL` | not set | Your own public address (for example a named Cloudflare tunnel) so the ChatGPT link stays the same. With it, no quick tunnel is started. |
 
 ## 🛠 Troubleshooting
 
