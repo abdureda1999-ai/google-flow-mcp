@@ -13,7 +13,10 @@ import argparse
 import os
 from typing import Any, Dict, List, Optional
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:
+    from mcp.server.fastmcp import FastMCP  # type: ignore
 from pydantic import BaseModel, Field
 
 from flow_mcp.engine import (
@@ -233,6 +236,36 @@ def flow_storyboard_director(
 # FastAPI OpenAPI Server for ChatGPT Custom GPT Actions
 # ---------------------------------------------------------------------------
 
+class FrameRequest(BaseModel):
+    prompt: str = Field(..., description="Visual description of the frame to generate or edit.")
+    reference_images: Optional[List[str]] = Field(None, description="Optional list of local paths or Gemini File URIs.")
+    aspect_ratio: str = Field("16:9", description="Aspect ratio (16:9, 9:16, 1:1).")
+    image_size: str = Field("2K", description="Resolution size (1K, 2K, 4K).")
+    previous_interaction_id: Optional[str] = Field(None, description="Previous interaction ID for multi-turn edits.")
+
+
+class TextToVideoRequest(BaseModel):
+    prompt: str = Field(..., description="Scene, camera movement, and sound design prompt.")
+    aspect_ratio: str = Field("16:9", description="16:9 or 9:16.")
+    duration: int = Field(10, ge=3, le=15, description="Duration in seconds (3-15).")
+    resolution: str = Field("720p", description="360p, 720p, 1080p, or 4k.")
+
+
+class FramesToVideoRequest(BaseModel):
+    prompt: str = Field(..., description="Camera motion and transition prompt.")
+    first_frame: str = Field(..., description="Path or File URI for starting frame.")
+    last_frame: Optional[str] = Field(None, description="Optional path or File URI for ending frame (3-10s max).")
+    aspect_ratio: str = Field("16:9", description="16:9 or 9:16.")
+    duration: int = Field(10, ge=3, le=15, description="Duration in seconds.")
+    resolution: str = Field("720p", description="360p, 720p, 1080p, or 4k.")
+
+
+class StoryboardRequest(BaseModel):
+    concept: str = Field(..., description="Campaign idea or creative brief.")
+    num_shots: int = Field(3, ge=1, le=10, description="Number of storyboard shots.")
+    aspect_ratio: str = Field("16:9", description="Target aspect ratio.")
+
+
 def create_openapi_app():
     """Builds a FastAPI application exposing all Flow tools as REST endpoints for ChatGPT Actions."""
     from fastapi import FastAPI, HTTPException
@@ -245,32 +278,6 @@ def create_openapi_app():
             "Google Flow video generation (Gemini Omni 1.2 Flash) and image frame fusion (Nano Banana 2.1)."
         ),
     )
-
-    class FrameRequest(BaseModel):
-        prompt: str = Field(..., description="Visual description of the frame to generate or edit.")
-        reference_images: Optional[List[str]] = Field(None, description="Optional list of local paths or Gemini File URIs.")
-        aspect_ratio: str = Field("16:9", description="Aspect ratio (16:9, 9:16, 1:1).")
-        image_size: str = Field("2K", description="Resolution size (1K, 2K, 4K).")
-        previous_interaction_id: Optional[str] = Field(None, description="Previous interaction ID for multi-turn edits.")
-
-    class TextToVideoRequest(BaseModel):
-        prompt: str = Field(..., description="Scene, camera movement, and sound design prompt.")
-        aspect_ratio: str = Field("16:9", description="16:9 or 9:16.")
-        duration: int = Field(10, ge=3, le=15, description="Duration in seconds (3-15).")
-        resolution: str = Field("720p", description="360p, 720p, 1080p, or 4k.")
-
-    class FramesToVideoRequest(BaseModel):
-        prompt: str = Field(..., description="Camera motion and transition prompt.")
-        first_frame: str = Field(..., description="Path or File URI for starting frame.")
-        last_frame: Optional[str] = Field(None, description="Optional path or File URI for ending frame (3-10s max).")
-        aspect_ratio: str = Field("16:9", description="16:9 or 9:16.")
-        duration: int = Field(10, ge=3, le=15, description="Duration in seconds.")
-        resolution: str = Field("720p", description="360p, 720p, 1080p, or 4k.")
-
-    class StoryboardRequest(BaseModel):
-        concept: str = Field(..., description="Campaign idea or creative brief.")
-        num_shots: int = Field(3, ge=1, le=10, description="Number of storyboard shots.")
-        aspect_ratio: str = Field("16:9", description="Target aspect ratio.")
 
     @app.post("/flow/generate-frame", operation_id="flowGenerateFrame")
     def api_generate_frame(req: FrameRequest):
@@ -354,9 +361,12 @@ def main():
         app = create_openapi_app()
         uvicorn.run(app, host=args.host, port=args.port)
     elif args.transport in ("sse", "streamable-http"):
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        mcp.run(transport=args.transport)
+        if hasattr(mcp, "settings"):
+            mcp.settings.host = args.host
+            mcp.settings.port = args.port
+            mcp.run(transport=args.transport)
+        else:
+            mcp.run(transport=args.transport, host=args.host, port=args.port)
     else:
         mcp.run(transport="stdio")
 
