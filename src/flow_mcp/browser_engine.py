@@ -109,11 +109,26 @@ def _read_credit_balance(page: Any) -> Optional[int]:
         btn.first.click()
         time.sleep(2)
         m = re.search(r"([\d,]+)\s+Google Flow credits", page.inner_text("body"), re.I)
-        page.keyboard.press("Escape")
-        time.sleep(1)
         return int(m.group(1).replace(",", "")) if m else None
     except Exception:
         return None
+    finally:
+        _close_overlays(page)
+
+
+def _close_overlays(page: Any) -> None:
+    """Close open menus. Escape alone can leave Flow's invisible backdrop up, which blocks later clicks."""
+    try:
+        page.keyboard.press("Escape")
+        time.sleep(0.5)
+        for _ in range(3):
+            backdrop = page.locator(".cdk-overlay-backdrop-showing")
+            if backdrop.count() == 0:
+                break
+            backdrop.last.click(force=True)
+            time.sleep(0.5)
+    except Exception:
+        pass
 
 
 def _credits_after(page: Any, before: Optional[int]) -> Dict[str, Any]:
