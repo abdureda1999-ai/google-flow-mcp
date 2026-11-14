@@ -22,6 +22,7 @@ except ImportError:
 from pydantic import BaseModel, Field
 
 from flow_mcp.browser_engine import (
+    get_media_dir,
     generate_image_via_flow_browser,
     generate_video_via_flow_browser,
     login_and_verify_flow_session,
@@ -55,6 +56,50 @@ def _has_real_api_key() -> bool:
     return key.strip().lower() not in placeholders
 
 
+_MAX_INLINE_IMAGE_BYTES = 3 * 1024 * 1024
+
+
+def _public_file_url(path: Optional[str]) -> Optional[str]:
+    """Download link for a saved file, when running in ChatGPT mode (served on the secret tunnel path)."""
+    base = os.environ.get("FLOW_PUBLIC_FILES_BASE")
+    if not base or not path or not os.path.isfile(path):
+        return None
+    from urllib.parse import quote
+
+    media_dir = os.path.realpath(get_media_dir())
+    if os.path.dirname(os.path.realpath(path)) != media_dir:
+        return None
+    return f"{base}/{quote(os.path.basename(path))}"
+
+
+def _with_media(result: Dict[str, Any], show_image: bool = False) -> Any:
+    """Add a download link and, for images, return the picture itself so ChatGPT/Claude can show it."""
+    path = result.get("output_path")
+    url = _public_file_url(path)
+    if url:
+        result["download_url"] = url
+        if show_image:
+            result["markdown"] = f"![Generated image]({url})"
+    if not (show_image and path and os.path.isfile(path)):
+        return result
+    if os.path.getsize(path) > _MAX_INLINE_IMAGE_BYTES:
+        return result
+    import json
+
+    from mcp.types import CallToolResult, TextContent
+
+    try:
+        from mcp.server.mcpserver import Image
+    except ImportError:  # older MCP SDK
+        from mcp.server.fastmcp import Image  # type: ignore
+
+    content = [
+        TextContent(type="text", text=json.dumps(result, indent=2)),
+        Image(path=path).to_image_content(),
+    ]
+    return CallToolResult(content=content, structured_content={"result": result})
+
+
 @mcp.tool()
 def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
     """Open Google Flow (`https://labs.google/fx/tools/flow`) in a visible Chrome window to sign in with your Google email and use your Flow subscription credits (NO API key required).
@@ -86,13 +131,13 @@ def flow_text_to_video(
         use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits without needing an API key.
     """
     if use_browser_credits or not _has_real_api_key():
-        return generate_video_via_flow_browser(
+        return _with_media(generate_video_via_flow_browser(
             prompt=prompt,
             mode="text_to_video",
             aspect_ratio=aspect_ratio,
             duration=duration,
             output_path=output_path,
-        )
+        ))
     return generate_flow_video(
         prompt=prompt,
         aspect_ratio=aspect_ratio,
@@ -126,7 +171,7 @@ def flow_frames_to_video(
         use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits without needing an API key.
     """
     if use_browser_credits or not _has_real_api_key():
-        return generate_video_via_flow_browser(
+        return _with_media(generate_video_via_flow_browser(
             prompt=prompt,
             mode="frames_to_video",
             first_frame=first_frame,
@@ -134,7 +179,7 @@ def flow_frames_to_video(
             aspect_ratio=aspect_ratio,
             duration=duration,
             output_path=output_path,
-        )
+        ))
     return generate_flow_video(
         prompt=prompt,
         first_frame=first_frame,
@@ -170,14 +215,14 @@ def flow_reference_to_video(
         use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits.
     """
     if use_browser_credits or not _has_real_api_key():
-        return generate_video_via_flow_browser(
+        return _with_media(generate_video_via_flow_browser(
             prompt=prompt,
             mode="reference_to_video",
             reference_images=reference_images,
             aspect_ratio=aspect_ratio,
             duration=duration,
             output_path=output_path,
-        )
+        ))
     return generate_flow_video(
         prompt=prompt,
         reference_images=reference_images,
@@ -217,11 +262,14 @@ def flow_generate_frame(
         use_browser_credits: If True (default), uses your Google Flow sign-in and credits instead of the Gemini API.
     """
     if use_browser_credits or not _has_real_api_key():
-        return generate_image_via_flow_browser(
-            prompt=prompt,
-            aspect_ratio=aspect_ratio,
-            reference_images=reference_images,
-            output_path=output_path,
+        return _with_media(
+            generate_image_via_flow_browser(
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                reference_images=reference_images,
+                output_path=output_path,
+            ),
+            show_image=True,
         )
     return generate_frame_image(
         prompt=prompt,
@@ -321,6 +369,14 @@ class StoryboardRequest(BaseModel):
     aspect_ratio: str = Field("16:9", description="Target aspect ratio.")
 
 
+def _plain(result: Any) -> Any:
+    """REST callers get plain JSON, not the MCP image wrapper."""
+    sc = getattr(result, "structured_content", None)
+    if isinstance(sc, dict) and "result" in sc:
+        return sc["result"]
+    return result
+
+
 def create_openapi_app():
     """Builds a FastAPI application exposing all Flow tools as REST endpoints for ChatGPT Actions."""
     from fastapi import FastAPI, HTTPException
@@ -344,14 +400,14 @@ def create_openapi_app():
     @app.post("/flow/generate-frame", operation_id="flowGenerateFrame")
     def api_generate_frame(req: FrameRequest):
         try:
-            return flow_generate_frame(
+            return _plain(flow_generate_frame(
                 prompt=req.prompt,
                 reference_images=req.reference_images,
                 aspect_ratio=req.aspect_ratio,
                 image_size=req.image_size,
                 previous_interaction_id=req.previous_interaction_id,
                 use_browser_credits=req.use_browser_credits,
-            )
+            ))
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -427,6 +483,20 @@ def _start_cloudflare_tunnel(port: int):
     return None, None
 
 
+def _register_file_route(token: str) -> None:
+    """Serve generated files at /<secret>/files/<name> so ChatGPT can show and download them."""
+    from starlette.responses import FileResponse, PlainTextResponse
+
+    @mcp.custom_route(f"/{token}/files/{{name}}", methods=["GET"], include_in_schema=False)
+    async def _serve_file(request):  # type: ignore[no-untyped-def]
+        name = os.path.basename(request.path_params.get("name", ""))
+        media_dir = os.path.realpath(get_media_dir())
+        path = os.path.realpath(os.path.join(media_dir, name))
+        if not name or os.path.dirname(path) != media_dir or not os.path.isfile(path):
+            return PlainTextResponse("Not found", status_code=404)
+        return FileResponse(path)
+
+
 def run_chatgpt_mode(port: int) -> None:
     """One command for ChatGPT: MCP over HTTP on a secret path, exposed through a public tunnel."""
     import secrets
@@ -449,6 +519,10 @@ def run_chatgpt_mode(port: int) -> None:
         print(f"Local URL (only reachable from this computer): http://127.0.0.1:{port}{path}", file=sys.stderr)
     print("Anyone with this URL can use your Flow credits. Press Ctrl-C to stop.", file=sys.stderr)
     print(bar, file=sys.stderr)
+
+    _register_file_route(token)
+    if public_url:
+        os.environ["FLOW_PUBLIC_FILES_BASE"] = f"{public_url}/{token}/files"
 
     try:
         from mcp.server.transport_security import TransportSecuritySettings

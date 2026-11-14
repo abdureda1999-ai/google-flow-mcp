@@ -16,7 +16,7 @@ Plan a shot with your assistant, then ask it to generate the video. The server d
 | `flow_text_to_video` | Flow sign-in | Generates a video from a text prompt with your Flow credits and saves the MP4. |
 | `flow_frames_to_video` | Flow sign-in *(experimental)* | Animates a starting image, or transitions from a first frame to a last frame. |
 | `flow_reference_to_video` | Flow sign-in *(experimental)* | Generates a video guided by reference images (product, character, style). |
-| `flow_generate_frame` | Flow sign-in | Generates an image (Nano Banana) with your Flow credits and saves it at full size. Reference images are experimental. |
+| `flow_generate_frame` | Flow sign-in | Generates an image (Nano Banana) with your Flow credits, saves it at full size, and returns the picture so Claude and ChatGPT can show it. Reference images are experimental. |
 | `flow_extend_or_edit_video` | Gemini API key | Extends or edits an existing clip. |
 | `flow_storyboard_director` | Gemini API key | Turns a brief into a multi-shot storyboard with frame and motion prompts. |
 
@@ -102,6 +102,7 @@ uvx --from git+https://github.com/abdureda1999-ai/google-flow-mcp google-flow-mc
 
 It prints a link like `https://something.trycloudflare.com/<secret>/mcp`. In ChatGPT, turn on **Developer mode** (Settings → Apps & Connectors → Advanced), create a connector, paste the link, and choose **No authentication**.
 
+- Ask ChatGPT for an image and it shows the picture in the chat, with a private **download link**. Videos come back with a download link too.
 - Keep that Terminal window open while you use ChatGPT. Your computer must stay on.
 - The link changes each time you start it, unless you set `FLOW_SECRET` (the secret part stays the same; the tunnel address still changes).
 - 🔒 **Anyone with the link can spend your Flow credits.** Don't share it, and press Ctrl-C when you're done.
