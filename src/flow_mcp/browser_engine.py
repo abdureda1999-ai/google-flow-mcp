@@ -297,6 +297,7 @@ def generate_video_via_flow_browser(
             # 6. Approve the credit charge (Flow's agent asks before each generation),
             #    then wait for the new video to render.
             initial_video_srcs = set(_video_srcs(page))
+            initial_thumbs = set(_thumbnail_srcs(page))
             start_wait = time.time()
             downloaded_file: Optional[str] = None
             final_video_src: Optional[str] = None
@@ -324,6 +325,11 @@ def generate_video_via_flow_browser(
                     if len(captured_video_urls) > initial_captured_count:
                         final_video_src = captured_video_urls[-1]
                         break
+
+                    # Flow shows a finished clip as a thumbnail and only creates the <video>
+                    # element on hover, so hover any new "Generated video thumbnail".
+                    if approved:
+                        _hover_new_video_thumbnails(page, initial_thumbs)
 
                     # Or a new <video> element appeared
                     new_srcs = [s for s in _video_srcs(page) if s not in initial_video_srcs]
@@ -394,6 +400,27 @@ def _video_srcs(page: Any) -> List[str]:
               .map(v => v.currentSrc || v.src || (v.querySelector('source') || {}).src || '')
               .filter(Boolean)"""
     )
+
+
+_THUMB_SELECTOR = 'img[alt="Generated video thumbnail"]'
+
+
+def _thumbnail_srcs(page: Any) -> List[str]:
+    """Sources of the generated-video thumbnails currently shown in the project grid."""
+    return page.evaluate(
+        "(sel) => [...document.querySelectorAll(sel)].map(i => i.src).filter(Boolean)", _THUMB_SELECTOR
+    )
+
+
+def _hover_new_video_thumbnails(page: Any, seen: set) -> None:
+    """Hover thumbnails that weren't there before generation so Flow loads their <video>."""
+    thumbs = page.locator(_THUMB_SELECTOR)
+    for i in range(thumbs.count()):
+        t = thumbs.nth(i)
+        src = t.get_attribute("src") or ""
+        if src and src not in seen and t.is_visible():
+            t.hover()
+            time.sleep(2)
 
 
 def _download_video(context: Any, page: Any, src: str) -> Optional[bytes]:
