@@ -41,7 +41,8 @@ def get_api_key() -> Optional[str]:
 
 def get_media_dir() -> str:
     """Returns the configured local media output directory."""
-    media_dir = os.environ.get("FLOW_MEDIA_DIR", os.path.abspath("./media"))
+    # Default to a folder people can find, also when installed with uvx/pipx.
+    media_dir = os.path.expanduser(os.environ.get("FLOW_MEDIA_DIR") or "~/Downloads/google-flow")
     os.makedirs(media_dir, exist_ok=True)
     return media_dir
 

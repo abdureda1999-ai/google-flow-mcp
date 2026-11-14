@@ -397,15 +397,95 @@ def create_openapi_app():
     return app
 
 
+def _start_cloudflare_tunnel(port: int):
+    """Start a free Cloudflare quick tunnel. Returns (process, public_url) or (None, None)."""
+    import re
+    import shutil
+    import subprocess
+    import time
+
+    exe = shutil.which("cloudflared")
+    if not exe:
+        return None, None
+    proc = subprocess.Popen(
+        [exe, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    deadline = time.time() + 45
+    while time.time() < deadline and proc.poll() is None:
+        line = proc.stdout.readline()
+        m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line or "")
+        if m:
+            import threading
+
+            # Keep draining output so the tunnel never blocks on a full pipe.
+            threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()
+            return proc, m.group(0)
+    proc.terminate()
+    return None, None
+
+
+def run_chatgpt_mode(port: int) -> None:
+    """One command for ChatGPT: MCP over HTTP on a secret path, exposed through a public tunnel."""
+    import secrets
+    import sys
+
+    token = os.environ.get("FLOW_SECRET") or secrets.token_urlsafe(18)
+    path = f"/{token}/mcp"
+    proc, public_url = _start_cloudflare_tunnel(port)
+
+    bar = "=" * 72
+    print(bar, file=sys.stderr)
+    if public_url:
+        print("ChatGPT connector URL (paste this into ChatGPT, keep it private):", file=sys.stderr)
+        print(f"\n    {public_url}{path}\n", file=sys.stderr)
+        print("In ChatGPT: turn on Developer mode (Settings > Apps & Connectors > Advanced), then create a connector.", file=sys.stderr)
+        print("Authentication: No authentication (the secret in the URL protects it).", file=sys.stderr)
+    else:
+        print("Could not start a public tunnel. Install cloudflared and run again:", file=sys.stderr)
+        print("    brew install cloudflared", file=sys.stderr)
+        print(f"Local URL (only reachable from this computer): http://127.0.0.1:{port}{path}", file=sys.stderr)
+    print("Anyone with this URL can use your Flow credits. Press Ctrl-C to stop.", file=sys.stderr)
+    print(bar, file=sys.stderr)
+
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        # The tunnel sends its own Host header; the secret path is the protection here.
+        security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+        mcp.run(
+            transport="streamable-http",
+            host="127.0.0.1",
+            port=port,
+            streamable_http_path=path,
+            transport_security=security,
+        )
+    finally:
+        if proc:
+            proc.terminate()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run the Google Flow MCP Server (stdio, sse, streamable-http, or openapi)."
     )
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse", "streamable-http", "openapi"],
+        choices=["stdio", "sse", "streamable-http", "openapi", "chatgpt"],
         default="stdio",
-        help="Transport protocol: 'stdio' (Claude Desktop/Code), 'sse' or 'streamable-http' (ChatGPT MCP), or 'openapi' (ChatGPT Custom GPT Actions).",
+        help=(
+            "Transport protocol: 'stdio' (Claude, Gemini CLI), 'chatgpt' (one command: HTTP server + "
+            "public tunnel + secret URL for ChatGPT), 'sse'/'streamable-http' (manual HTTP), or 'openapi' "
+            "(ChatGPT Custom GPT Actions)."
+        ),
+    )
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=["chatgpt"],
+        help="Shortcut: `google-flow-mcp chatgpt` is the same as `--transport chatgpt`.",
     )
     parser.add_argument(
         "--host",
@@ -419,6 +499,12 @@ def main():
         help="Port for HTTP/SSE/OpenAPI modes (default: 8000).",
     )
     args = parser.parse_args()
+    if args.mode == "chatgpt":
+        args.transport = "chatgpt"
+
+    if args.transport == "chatgpt":
+        run_chatgpt_mode(args.port)
+        return
 
     if args.transport == "openapi":
         import uvicorn

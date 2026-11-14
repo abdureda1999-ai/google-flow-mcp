@@ -25,109 +25,107 @@ The video and image tools use your Flow sign-in by default. If you set `GEMINI_A
 ### How sign-in mode works
 1. Opens Flow in Chrome with a saved profile, so you stay signed in.
 2. Creates a new project, types your prompt, and starts the generation.
-3. Flow asks before spending credits (for example *"costing 30 credits?"*). The tool clicks **Approve** for that one generation only, never "Always approve", and returns the cost as `credits_cost`.
+3. Flow asks before spending credits (for example *"costing 30 credits?"*). The tool clicks **Approve** for that one generation only, never "Always approve", and returns the cost as `credits_cost`. The tools also read your credit balance before and after, and report `credits_used`, `credits_before` and `credits_after`.
 4. Waits for the result (up to 10 minutes for video, 7 for images), then saves it to your media folder. Images are saved at full size, not Flow's small preview.
 
 **Leave the Chrome window open until the tool finishes.** Closing it stops the download, but the clip may still finish in your Flow project.
 
 ---
 
-## 🚀 Install
+## 🚀 Install (2 minutes)
 
-### Requirements
-- Python 3.10+
-- Google Chrome
-- A Google account with Google Flow access and credits
-- Optional: a [Gemini API key](https://aistudio.google.com/apikey) for the API-only tools
+You need **Google Chrome**, a Google account with **Google Flow** credits, and **uv** (a Python installer). Install uv once:
 
-### Setup
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+No cloning or Python setup needed: every command below runs the server straight from GitHub with `uvx`.
+
+The first time you use it, ask your assistant to **run `flow_browser_login`** and sign in to Google in the Chrome window that opens. You only do this once.
+
+Generated videos and images are saved to **`~/Downloads/google-flow`**.
+
+---
+
+## 🔌 Claude Code
+
+```bash
+claude mcp add google-flow -- uvx --from git+https://github.com/abdureda1999-ai/google-flow-mcp google-flow-mcp
+```
+
+## 🔌 Claude Desktop
+
+Find the full path of `uvx` with `which uvx` (usually `~/.local/bin/uvx`), then add this to `~/Library/Application Support/Claude/claude_desktop_config.json` and restart Claude:
+
+```json
+{
+  "mcpServers": {
+    "google-flow": {
+      "command": "/Users/YOU/.local/bin/uvx",
+      "args": ["--from", "git+https://github.com/abdureda1999-ai/google-flow-mcp", "google-flow-mcp"]
+    }
+  }
+}
+```
+
+## ♊ Gemini CLI
+
+Add this to `~/.gemini/settings.json`, restart `gemini`, and run `/mcp` to check that `google-flow` is listed:
+
+```json
+{
+  "mcpServers": {
+    "google-flow": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/abdureda1999-ai/google-flow-mcp", "google-flow-mcp"]
+    }
+  }
+}
+```
+
+> The Gemini web and mobile apps can't connect to custom MCP servers like this one, so use Gemini CLI.
+
+## 🤖 ChatGPT
+
+ChatGPT runs in the cloud, so it needs a public link to the server on your computer. One command sets that up. First install Cloudflare's free tunnel tool once:
+
+```bash
+brew install cloudflared
+```
+
+Then start ChatGPT mode:
+
+```bash
+uvx --from git+https://github.com/abdureda1999-ai/google-flow-mcp google-flow-mcp chatgpt
+```
+
+It prints a link like `https://something.trycloudflare.com/<secret>/mcp`. In ChatGPT, turn on **Developer mode** (Settings → Apps & Connectors → Advanced), create a connector, paste the link, and choose **No authentication**.
+
+- Keep that Terminal window open while you use ChatGPT. Your computer must stay on.
+- The link changes each time you start it, unless you set `FLOW_SECRET` (the secret part stays the same; the tunnel address still changes).
+- 🔒 **Anyone with the link can spend your Flow credits.** Don't share it, and press Ctrl-C when you're done.
+
+<details>
+<summary>Custom GPT Actions (OpenAPI) instead</summary>
+
+```bash
+uvx --from git+https://github.com/abdureda1999-ai/google-flow-mcp google-flow-mcp --transport openapi --port 8000
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+In **Create a GPT → Configure → Actions → Import from URL**, paste `https://YOUR-TUNNEL.trycloudflare.com/openapi.json`. This endpoint has no secret, so only run it while you're using it.
+</details>
+
+---
+
+## 🧑‍💻 Developing locally
+
 ```bash
 git clone https://github.com/abdureda1999-ai/google-flow-mcp.git
 cd google-flow-mcp
-python3 -m venv .venv
-.venv/bin/pip install -e .
+python3 -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/google-flow-mcp --help
 ```
-Sign-in mode uses your installed Google Chrome, so no extra browser download is needed.
-
----
-
-## 🔌 Connect to Claude
-
-### Claude Code
-```bash
-claude mcp add google-flow \
-  -e FLOW_MEDIA_DIR="$PWD/media" \
-  -- "$PWD/.venv/bin/google-flow-mcp" --transport stdio
-```
-
-### Claude Desktop
-Add this to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
-
-```json
-{
-  "mcpServers": {
-    "google-flow": {
-      "command": "/ABSOLUTE/PATH/TO/google-flow-mcp/.venv/bin/google-flow-mcp",
-      "args": ["--transport", "stdio"],
-      "env": {
-        "FLOW_MEDIA_DIR": "/ABSOLUTE/PATH/TO/google-flow-mcp/media"
-      }
-    }
-  }
-}
-```
-
-Add `"GEMINI_API_KEY": "..."` to `env` only if you want the API-only tools.
-
-Then ask Claude: *"Run `flow_browser_login`"*, sign in in the Chrome window, and you're ready.
-
----
-
-## 🤖 Connect to ChatGPT
-
-ChatGPT runs in the cloud, so it needs a public HTTPS address that reaches the server on your computer. Because sign-in mode opens Chrome on your machine, **your computer must be on with the server and tunnel running** while ChatGPT uses it.
-
-### Option A: MCP connector (ChatGPT developer mode)
-```bash
-.venv/bin/google-flow-mcp --transport streamable-http --port 8000
-```
-In another terminal, expose it over HTTPS:
-```bash
-ngrok http 8000
-```
-In ChatGPT, open **Settings → Connectors → Advanced → Developer mode**, add a connector, and enter `https://YOUR-TUNNEL.ngrok-free.app/mcp`.
-
-### Option B: Custom GPT Actions (OpenAPI)
-```bash
-.venv/bin/google-flow-mcp --transport openapi --port 8000
-```
-Expose it with `ngrok http 8000`, then in **Create a GPT → Configure → Actions → Import from URL** paste `https://YOUR-TUNNEL.ngrok-free.app/openapi.json`.
-
-> 🔒 Anyone with your tunnel URL can use your Flow credits. Don't share the URL, and stop the tunnel when you're done.
-
----
-
-## ♊ Connect to Gemini CLI
-
-Add the server to `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "google-flow": {
-      "command": "/ABSOLUTE/PATH/TO/google-flow-mcp/.venv/bin/google-flow-mcp",
-      "args": ["--transport", "stdio"],
-      "env": {
-        "FLOW_MEDIA_DIR": "/ABSOLUTE/PATH/TO/google-flow-mcp/media"
-      }
-    }
-  }
-}
-```
-
-Restart `gemini`, run `/mcp` to check that `google-flow` is listed, then ask it to run `flow_browser_login`.
-
-> The Gemini web and mobile apps don't support custom MCP servers like this one, so use Gemini CLI.
 
 ---
 
@@ -144,9 +142,10 @@ Restart `gemini`, run `/mcp` to check that `google-flow` is listed, then ask it 
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `FLOW_MEDIA_DIR` | `./media` | Where videos, images and screenshots are saved. |
+| `FLOW_MEDIA_DIR` | `~/Downloads/google-flow` | Where videos, images and screenshots are saved. |
 | `GEMINI_API_KEY` | not set | Turns on the API-only tools. |
 | `FLOW_HOST` / `FLOW_PORT` | `127.0.0.1` / `8000` | Address for the HTTP transports. |
+| `FLOW_SECRET` | random each start | Secret part of the ChatGPT link. |
 
 ## 🛠 Troubleshooting
 

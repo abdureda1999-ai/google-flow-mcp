@@ -32,10 +32,8 @@ def get_profile_dir() -> str:
 
 def get_media_dir() -> str:
     """Returns the directory where generated videos and images are saved."""
-    media_dir = os.environ.get(
-        "FLOW_MEDIA_DIR",
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "media")),
-    )
+    # Default to a folder people can find, also when installed with uvx/pipx.
+    media_dir = os.path.expanduser(os.environ.get("FLOW_MEDIA_DIR") or "~/Downloads/google-flow")
     os.makedirs(media_dir, exist_ok=True)
     return media_dir
 
