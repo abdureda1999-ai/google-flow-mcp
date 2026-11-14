@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "google-flow-mcp"
+version = "0.1.0"
+description = "Model Context Protocol (MCP) server & OpenAPI bridge connecting Google Flow (Gemini Omni 1.2 Flash Video + Nano Banana 2.1 Image Studio) to Claude Desktop, Claude Code, and ChatGPT."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Abdureda" }
+]
+keywords = [
+    "mcp",
+    "google-flow",
+    "gemini",
+    "video-generation",
+    "image-generation",
+    "claude",
+    "chatgpt",
+    "ai-filmmaking",
+]
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "google-genai>=2.30.1",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "pydantic>=2.6.0",
+]
+
+[project.scripts]
+google-flow-mcp = "flow_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
