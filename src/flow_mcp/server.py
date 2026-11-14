@@ -22,6 +22,7 @@ except ImportError:
 from pydantic import BaseModel, Field
 
 from flow_mcp.browser_engine import (
+    generate_image_via_flow_browser,
     generate_video_via_flow_browser,
     login_and_verify_flow_session,
 )
@@ -197,8 +198,13 @@ def flow_generate_frame(
     model: str = DEFAULT_IMAGE_MODEL,
     previous_interaction_id: Optional[str] = None,
     output_path: Optional[str] = None,
+    use_browser_credits: bool = True,
 ) -> Dict[str, Any]:
-    """Generate a starting frame, ending keyframe, or Whisk-style reference fusion image.
+    """Generate an image (starting frame, keyframe, product shot) with Nano Banana.
+
+    By default (`use_browser_credits=True`, or when no API key is set) it uses your signed-in
+    Google Flow account and credits, no API key needed. In that mode Flow picks the size, and
+    `image_size`, `model` and `previous_interaction_id` are ignored.
 
     Args:
         prompt: Detailed visual description of the frame or edit instruction.
@@ -207,8 +213,16 @@ def flow_generate_frame(
         image_size: Output resolution ('1K', '2K', '4K'). Default '2K'.
         model: Gemini image model ('gemini-nano-banana-2.1' or 'gemini-3-pro-image').
         previous_interaction_id: Optional interaction ID from a prior turn.
-        output_path: Optional custom local file path for saving the PNG image.
+        output_path: Optional custom local file path for saving the image.
+        use_browser_credits: If True (default), uses your Google Flow sign-in and credits instead of the Gemini API.
     """
+    if use_browser_credits or not _has_real_api_key():
+        return generate_image_via_flow_browser(
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+            reference_images=reference_images,
+            output_path=output_path,
+        )
     return generate_frame_image(
         prompt=prompt,
         reference_images=reference_images,
@@ -280,6 +294,7 @@ class FrameRequest(BaseModel):
     aspect_ratio: str = Field("16:9", description="Aspect ratio (16:9, 9:16, 1:1).")
     image_size: str = Field("2K", description="Resolution size (1K, 2K, 4K).")
     previous_interaction_id: Optional[str] = Field(None, description="Previous interaction ID for multi-turn edits.")
+    use_browser_credits: bool = Field(True, description="Use logged-in Google Flow web session & credits (no API key required).")
 
 
 class TextToVideoRequest(BaseModel):
@@ -335,6 +350,7 @@ def create_openapi_app():
                 aspect_ratio=req.aspect_ratio,
                 image_size=req.image_size,
                 previous_interaction_id=req.previous_interaction_id,
+                use_browser_credits=req.use_browser_credits,
             )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))

@@ -442,3 +442,163 @@ def _download_video(context: Any, page: Any, src: str) -> Optional[bytes]:
         )
         return base64.b64decode(b64) if b64 else None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Image generation with Flow credits (Nano Banana via Flow's assistant)
+# ---------------------------------------------------------------------------
+
+
+def _flow_images(page: Any) -> List[Dict[str, Any]]:
+    """Generated images in the project grid. Flow serves them from /asb/ URLs; video thumbnails are excluded."""
+    return page.evaluate(
+        """() => [...document.querySelectorAll('img')]
+              .filter(i => /flow\\.google\\.com\\/asb\\//.test(i.src) && !/video/i.test(i.alt || ''))
+              .map(i => ({src: i.src, alt: i.alt || ''}))"""
+    )
+
+
+def _full_size_image_url(src: str) -> str:
+    """Flow shows a small preview (e.g. `=s512-rw`); `=s0` asks for the original size."""
+    base = re.sub(r"=[^/=]*$", "", src)
+    return base + "=s0"
+
+
+def _download_flow_image(context: Any, src: str) -> Optional[tuple]:
+    """Download a Flow image at full size. Returns (bytes, content_type) or None."""
+    for url in (_full_size_image_url(src), src):
+        resp = context.request.get(url)
+        if resp.ok and resp.body():
+            return resp.body(), resp.headers.get("content-type", "")
+    return None
+
+
+def _ext_for(content_type: str) -> str:
+    ct = (content_type or "").lower()
+    if "png" in ct:
+        return ".png"
+    if "webp" in ct:
+        return ".webp"
+    return ".jpg"
+
+
+def generate_image_via_flow_browser(
+    prompt: str,
+    aspect_ratio: str = "16:9",
+    reference_images: Optional[List[str]] = None,
+    output_path: Optional[str] = None,
+    timeout_seconds: int = 420,
+    headless: bool = False,
+) -> Dict[str, Any]:
+    """Generate an image in Google Flow with your signed-in account and credits (no API key).
+
+    Flow's assistant picks the image model (Nano Banana); the prompt asks for an image explicitly.
+    """
+    from playwright.sync_api import sync_playwright
+
+    if not output_path:
+        output_path = os.path.join(get_media_dir(), f"flow_image_{_slugify(prompt)}_{uuid.uuid4().hex[:6]}.jpg")
+    output_path = os.path.abspath(output_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    with sync_playwright() as p:
+        context = _launch_persistent_context(p, headless=headless)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
+            time.sleep(5)
+            _click_landing_cta(page)
+            if "accounts.google.com" in page.url or "/about" in page.url:
+                raise RuntimeError("Not signed in to Google Flow. Call `flow_browser_login` first.")
+
+            new_project = page.get_by_text(re.compile(r"new project", re.I))
+            if new_project.count() > 0 and new_project.first.is_visible():
+                new_project.first.click()
+                time.sleep(5)
+
+            if reference_images:
+                files = [os.path.abspath(f) for f in reference_images if os.path.exists(f)]
+                file_inputs = page.locator('input[type="file"]')
+                if files and file_inputs.count() > 0:
+                    file_inputs.first.set_input_files(files)
+                    time.sleep(4)
+
+            prompt_box = page.get_by_role("textbox", name=re.compile(r"what do you want to create", re.I)).first
+            try:
+                prompt_box.wait_for(state="visible", timeout=30000)
+            except Exception:
+                raise RuntimeError(f"Could not find the Flow prompt box on {page.url}. The Flow UI may have changed.")
+
+            before = {i["src"] for i in _flow_images(page)}
+            full_prompt = f"Create an image ({aspect_ratio}): {prompt}"
+            prompt_box.click()
+            prompt_box.fill(full_prompt)
+            time.sleep(1)
+            start_btn = page.get_by_role("button", name=re.compile(r"^start generation$", re.I))
+            if start_btn.count() > 0 and start_btn.last.is_enabled():
+                start_btn.last.click()
+            else:
+                prompt_box.press("Enter")
+
+            approved = False
+            credits_cost: Optional[int] = None
+            found: Optional[str] = None
+            start = time.time()
+            try:
+                while time.time() - start < timeout_seconds:
+                    if not approved:
+                        approve = page.get_by_role("radio", name="Approve", exact=True)
+                        if approve.count() > 0 and approve.last.is_visible():
+                            costs = re.findall(r"costing\s+(\d+)\s+credits", page.inner_text("body"), re.I)
+                            credits_cost = int(costs[-1]) if costs else None
+                            approve.last.click()  # this one generation only, never "Always approve"
+                            approved = True
+                            time.sleep(3)
+                            continue
+                    new = [i["src"] for i in _flow_images(page) if i["src"] not in before]
+                    if new:
+                        found = new[-1]
+                        break
+                    time.sleep(3)
+
+                ui_screenshot = os.path.splitext(output_path)[0] + "_flow_ui.png"
+                page.screenshot(path=ui_screenshot)
+
+                saved: Optional[str] = None
+                if found:
+                    got = _download_flow_image(context, found)
+                    if got:
+                        data, ctype = got
+                        saved = os.path.splitext(output_path)[0] + _ext_for(ctype)
+                        with open(saved, "wb") as f:
+                            f.write(data)
+            except Exception as e:
+                if "closed" in str(e).lower():
+                    raise RuntimeError(
+                        "The Chrome window was closed before the image finished. "
+                        "Check the newest project in Google Flow for the image."
+                    )
+                raise
+
+            if saved:
+                status, message = "completed", f"Image generated with your Google Flow credits and saved to {saved}"
+            elif found:
+                status, message = "download_failed", f"Image was generated but could not be downloaded. See {page.url}"
+            else:
+                status = "timed_out_waiting_for_image"
+                message = f"No image appeared within {timeout_seconds}s. See {page.url} and {ui_screenshot}"
+
+            return {
+                "status": status,
+                "engine": "google_flow_browser_credits",
+                "mode": "image",
+                "prompt": full_prompt,
+                "credits_cost": credits_cost,
+                "approved": approved,
+                "output_path": saved,
+                "ui_screenshot": ui_screenshot,
+                "flow_project_url": page.url,
+                "message": message,
+            }
+        finally:
+            context.close()

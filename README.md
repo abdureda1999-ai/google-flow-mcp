@@ -16,17 +16,17 @@ Plan a shot with your assistant, then ask it to generate the video. The server d
 | `flow_text_to_video` | Flow sign-in | Generates a video from a text prompt with your Flow credits and saves the MP4. |
 | `flow_frames_to_video` | Flow sign-in *(experimental)* | Animates a starting image, or transitions from a first frame to a last frame. |
 | `flow_reference_to_video` | Flow sign-in *(experimental)* | Generates a video guided by reference images (product, character, style). |
-| `flow_generate_frame` | Gemini API key | Generates a still image or keyframe, optionally from reference images. |
+| `flow_generate_frame` | Flow sign-in | Generates an image (Nano Banana) with your Flow credits and saves it at full size. Reference images are experimental. |
 | `flow_extend_or_edit_video` | Gemini API key | Extends or edits an existing clip. |
 | `flow_storyboard_director` | Gemini API key | Turns a brief into a multi-shot storyboard with frame and motion prompts. |
 
-The video tools use your Flow sign-in by default. If you set `GEMINI_API_KEY` and pass `use_browser_credits=false`, they use the Gemini API instead.
+The video and image tools use your Flow sign-in by default. If you set `GEMINI_API_KEY` and pass `use_browser_credits=false`, they use the Gemini API instead. In sign-in mode Flow chooses the image size (for example 768×1376 for 9:16), so `image_size` and `model` only apply with an API key.
 
 ### How sign-in mode works
 1. Opens Flow in Chrome with a saved profile, so you stay signed in.
 2. Creates a new project, types your prompt, and starts the generation.
 3. Flow asks before spending credits (for example *"costing 30 credits?"*). The tool clicks **Approve** for that one generation only, never "Always approve", and returns the cost as `credits_cost`.
-4. Waits up to 10 minutes for the video, then saves it to your media folder.
+4. Waits for the result (up to 10 minutes for video, 7 for images), then saves it to your media folder. Images are saved at full size, not Flow's small preview.
 
 **Leave the Chrome window open until the tool finishes.** Closing it stops the download, but the clip may still finish in your Flow project.
 
@@ -135,6 +135,7 @@ Restart `gemini`, run `/mcp` to check that `google-flow` is listed, then ask it 
 
 - *"Use `flow_text_to_video` to make a cinematic studio commercial of a matte black sports car under moving neon light, 16:9."*
 - *"Make a 9:16 vertical clip of coffee being poured in slow motion with warm morning light."*
+- *"Use `flow_generate_frame` to make a 9:16 worm's-eye product shot of a cold soda can against a blue summer sky."*
 - *"Use `flow_frames_to_video` with `/path/to/start.png` as the first frame and `/path/to/end.png` as the last frame for an 8-second transition."*
 
 ---
