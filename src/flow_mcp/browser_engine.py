@@ -102,6 +102,36 @@ def _is_in_flow_workspace(page: Any) -> bool:
     return has_textarea or has_new_project
 
 
+def _read_credit_balance(page: Any) -> Optional[int]:
+    """Read "N Google Flow credits" from the Account details (PRO) menu. Returns None if not found."""
+    try:
+        btn = page.get_by_role("button", name="Account details")
+        if btn.count() == 0:
+            return None
+        btn.first.click()
+        time.sleep(2)
+        m = re.search(r"([\d,]+)\s+Google Flow credits", page.inner_text("body"), re.I)
+        page.keyboard.press("Escape")
+        time.sleep(1)
+        return int(m.group(1).replace(",", "")) if m else None
+    except Exception:
+        return None
+
+
+def _credits_after(page: Any, before: Optional[int]) -> Dict[str, Any]:
+    """Go back to the Flow home page, read the balance again, and report what was used."""
+    project_url = page.url
+    after = None
+    try:
+        page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(5)
+        after = _read_credit_balance(page)
+    except Exception:
+        pass
+    used = before - after if before is not None and after is not None else None
+    return {"credits_before": before, "credits_after": after, "credits_used": used, "flow_project_url": project_url}
+
+
 def login_and_verify_flow_session(wait_seconds: int = 120) -> Dict[str, Any]:
     """Opens Google Flow in a visible Chrome window so the user can log in with their Google email,
     or verifies that the session is already logged in and ready."""
@@ -193,7 +223,9 @@ def generate_video_via_flow_browser(
             time.sleep(5)
 
             # 1. If on the public landing page, click "Create with Google Flow" (button or link)
+            credits_before = _read_credit_balance(page) if "/about" not in page.url else None
             if not _click_landing_cta(page):
+                credits_before = credits_before if credits_before is not None else _read_credit_balance(page)
                 btn = page.get_by_role("button", name=re.compile(r"new project", re.I))
                 if btn.count() > 0 and btn.first.is_visible():
                     btn.first.click()
@@ -377,7 +409,11 @@ def generate_video_via_flow_browser(
                     f"See the screenshot: {ui_screenshot}"
                 )
 
+            credit_info = _credits_after(page, credits_before)
+            if credit_info["credits_used"] is not None:
+                credits_cost = credit_info["credits_used"]
             return {
+                **credit_info,
                 "status": status,
                 "engine": "google_flow_browser_credits",
                 "mode": mode,
@@ -385,7 +421,6 @@ def generate_video_via_flow_browser(
                 "credits_cost": credits_cost,
                 "output_path": downloaded_file,
                 "ui_screenshot": ui_screenshot,
-                "flow_project_url": page.url,
                 "video_src": final_video_src if final_video_src and final_video_src.startswith("http") else None,
                 "message": message,
             }
@@ -510,6 +545,7 @@ def generate_image_via_flow_browser(
             _click_landing_cta(page)
             if "accounts.google.com" in page.url or "/about" in page.url:
                 raise RuntimeError("Not signed in to Google Flow. Call `flow_browser_login` first.")
+            credits_before = _read_credit_balance(page)
 
             new_project = page.get_by_text(re.compile(r"new project", re.I))
             if new_project.count() > 0 and new_project.first.is_visible():
@@ -588,7 +624,11 @@ def generate_image_via_flow_browser(
                 status = "timed_out_waiting_for_image"
                 message = f"No image appeared within {timeout_seconds}s. See {page.url} and {ui_screenshot}"
 
+            credit_info = _credits_after(page, credits_before)
+            if credit_info["credits_used"] is not None:
+                credits_cost = credit_info["credits_used"]
             return {
+                **credit_info,
                 "status": status,
                 "engine": "google_flow_browser_credits",
                 "mode": "image",
@@ -597,7 +637,6 @@ def generate_image_via_flow_browser(
                 "approved": approved,
                 "output_path": saved,
                 "ui_screenshot": ui_screenshot,
-                "flow_project_url": page.url,
                 "message": message,
             }
         finally:
