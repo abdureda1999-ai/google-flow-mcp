@@ -18,7 +18,19 @@ import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional
 
-FLOW_URL = "https://labs.google/fx/tools/flow"
+FLOW_URL = "https://flow.google.com/"  # labs.google/fx/tools/flow redirects here
+
+
+def _goto_flow(page: Any, url: str = FLOW_URL) -> None:
+    """Open a Flow page, retrying once if Chrome aborts the first load (e.g. during a redirect)."""
+    for attempt in range(3):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            return
+        except Exception as e:
+            if "ERR_ABORTED" not in str(e) or attempt == 2:
+                raise
+            time.sleep(3)
 WHISK_URL = "https://labs.google/fx/tools/whisk"
 
 
@@ -136,7 +148,7 @@ def _credits_after(page: Any, before: Optional[int]) -> Dict[str, Any]:
     project_url = page.url
     after = None
     try:
-        page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
+        _goto_flow(page)
         time.sleep(5)
         after = _read_credit_balance(page)
     except Exception:
@@ -154,7 +166,7 @@ def login_and_verify_flow_session(wait_seconds: int = 120) -> Dict[str, Any]:
         context = _launch_persistent_context(p, headless=False)
         try:
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
+            _goto_flow(page)
             time.sleep(4)
 
             # On the public landing page, click "Create with Google Flow" once so the
@@ -232,7 +244,7 @@ def generate_video_via_flow_browser(
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.on("response", _on_response)
-            page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
+            _goto_flow(page)
             time.sleep(5)
 
             # 1. If on the public landing page, click "Create with Google Flow" (button or link)
@@ -553,7 +565,7 @@ def generate_image_via_flow_browser(
         context = _launch_persistent_context(p, headless=headless)
         try:
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=60000)
+            _goto_flow(page)
             time.sleep(5)
             _click_landing_cta(page)
             if "accounts.google.com" in page.url or "/about" in page.url:
