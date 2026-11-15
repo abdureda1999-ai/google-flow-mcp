@@ -601,6 +601,27 @@ def _start_ngrok_tunnel(port: int, domain: str):
     return _Stopper(), f"https://{domain}"
 
 
+def _cloudflared_quick_tunnel_url(metrics_addr: str, wait_seconds: int = 60):
+    """Read the public URL of a separately running cloudflared quick tunnel from its metrics server
+    (cloudflared ... --metrics 127.0.0.1:20241). Keeping the tunnel in its own process means
+    restarting or updating this server doesn't change the ChatGPT link."""
+    import json
+    import time
+    import urllib.request
+
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://{metrics_addr}/quicktunnel", timeout=3) as r:
+                host = json.load(r).get("hostname")
+            if host:
+                return f"https://{host}"
+        except Exception:
+            pass
+        time.sleep(2)
+    return None
+
+
 def _load_or_create_secret() -> str:
     """Use FLOW_SECRET, or a secret saved in ~/.google-flow-mcp/secret so the ChatGPT link stays the same."""
     import secrets
@@ -650,6 +671,9 @@ def run_chatgpt_mode(port: int) -> None:
     proc = None
     if not public_url and ngrok_domain:
         proc, public_url = _start_ngrok_tunnel(port, ngrok_domain)
+    metrics = os.environ.get("FLOW_CLOUDFLARED_METRICS", "").strip()
+    if not public_url and metrics:
+        public_url = _cloudflared_quick_tunnel_url(metrics)
     if not public_url:
         proc, public_url = _start_cloudflare_tunnel(port)
 

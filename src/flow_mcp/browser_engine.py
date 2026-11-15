@@ -98,6 +98,7 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
         if headless
         else []
     )
+    front_app = _front_app_bundle_id() if headless else None
     context = playwright.chromium.launch_persistent_context(
         user_data_dir=profile_dir,
         channel="chrome",
@@ -120,10 +121,44 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
     if headless:
         # macOS pulls off-screen windows back onto the screen, so also minimize the window
         # (and any tab Flow or the tool opens later) to keep it out of sight.
+        context.on("page", lambda pg: _minimize_window(context, pg))
         for pg in context.pages:
             _minimize_window(context, pg)
-        context.on("page", lambda pg: _minimize_window(context, pg))
+        _give_focus_back(front_app)
     return context
+
+
+def _front_app_bundle_id() -> Optional[str]:
+    """Bundle id of the app you're using (macOS), so focus can go back to it after Chrome starts."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        import subprocess
+
+        asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=3).stdout.strip()
+        out = subprocess.run(
+            ["lsappinfo", "info", "-only", "bundleid", asn], capture_output=True, text=True, timeout=3
+        ).stdout
+        m = re.search(r'"([^"]+)"\s*$', out.strip())
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _give_focus_back(bundle_id: Optional[str]) -> None:
+    """Chrome grabs focus when it starts; hand it back to the app you were using."""
+    if not bundle_id or bundle_id == "com.google.Chrome":
+        return
+    try:
+        import subprocess
+
+        subprocess.run(
+            ["osascript", "-e", f'tell application id "{bundle_id}" to activate'],
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        pass
 
 
 def _minimize_window(context: Any, page: Any) -> None:
@@ -592,8 +627,14 @@ def _hover_new_video_thumbnails(page: Any, seen: set) -> None:
 def _download_video(context: Any, page: Any, src: str) -> Optional[bytes]:
     """Download a video by URL through the signed-in browser. Supports http(s) and blob: URLs."""
     if src.startswith("http"):
-        resp = context.request.get(src)
-        return resp.body() if resp.ok else None
+        for _ in range(3):
+            try:
+                resp = context.request.get(src, timeout=180000)
+                if resp.ok and resp.body():
+                    return resp.body()
+            except Exception:
+                time.sleep(3)
+        return None
     if src.startswith("blob:"):
         import base64
 
@@ -668,10 +709,14 @@ def _full_size_image_url(src: str) -> str:
 
 def _download_flow_image(context: Any, src: str) -> Optional[tuple]:
     """Download a Flow image at full size. Returns (bytes, content_type) or None."""
-    for url in (_full_size_image_url(src), src):
-        resp = context.request.get(url)
-        if resp.ok and resp.body():
-            return resp.body(), resp.headers.get("content-type", "")
+    # Full size first, then Flow's preview size; Google can be slow to serve the original.
+    for url, timeout_ms in ((_full_size_image_url(src), 90000), (src, 60000), (src, 60000)):
+        try:
+            resp = context.request.get(url, timeout=timeout_ms)
+            if resp.ok and resp.body():
+                return resp.body(), resp.headers.get("content-type", "")
+        except Exception:
+            continue
     return None
 
 
