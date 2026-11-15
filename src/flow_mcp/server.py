@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
+import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 try:
@@ -102,6 +105,65 @@ def _with_media(result: Dict[str, Any], show_image: bool = False) -> Any:
     return CallToolResult(content=content, structured_content={"result": result}, _meta=meta)
 
 
+# Video generation takes 1-5 minutes, longer than ChatGPT (and some other clients) wait for a
+# tool call. So video tools start a background job and return at once; `flow_check_video`
+# fetches the result. One job runs at a time because all jobs share one Chrome profile.
+_VIDEO_JOBS: Dict[str, Dict[str, Any]] = {}
+_VIDEO_LOCK = threading.Lock()
+_CHECK_WAIT_SECONDS = 45  # stays under ChatGPT's tool-call timeout
+
+
+def _start_video_job(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    job_id = uuid.uuid4().hex[:8]
+    _VIDEO_JOBS[job_id] = {"status": "generating", "started_at": time.time(), "prompt": kwargs.get("prompt")}
+
+    def run() -> None:
+        try:
+            with _VIDEO_LOCK:
+                _VIDEO_JOBS[job_id]["status"] = "generating"
+                result = _with_media(generate_video_via_flow_browser(**kwargs))
+            _VIDEO_JOBS[job_id] = {"status": "done", "result": result}
+        except Exception as e:  # report the error to flow_check_video instead of losing it
+            _VIDEO_JOBS[job_id] = {"status": "error", "result": {"status": "error", "message": str(e)}}
+
+    if _VIDEO_LOCK.locked():
+        _VIDEO_JOBS[job_id]["status"] = "queued"
+    threading.Thread(target=run, daemon=True, name=f"flow-video-{job_id}").start()
+    return {
+        "status": "generating",
+        "job_id": job_id,
+        "mode": "video",
+        "message": (
+            "The video is generating in Google Flow (usually 1-5 minutes). Call `flow_check_video` "
+            f"with job_id '{job_id}' to get it; call it again if it is still generating. "
+            "Do not start the same video again."
+        ),
+    }
+
+
+def _check_video_job(job_id: Optional[str], wait_seconds: int) -> Any:
+    if not job_id and _VIDEO_JOBS:
+        job_id = list(_VIDEO_JOBS)[-1]
+    job = _VIDEO_JOBS.get(job_id or "")
+    if job is None:
+        # Unknown job (e.g. the server restarted): show the newest saved video instead.
+        return flow_show_latest("video")
+    deadline = time.time() + max(0, min(wait_seconds, _CHECK_WAIT_SECONDS))
+    while job["status"] in ("generating", "queued") and time.time() < deadline:
+        time.sleep(2)
+        job = _VIDEO_JOBS[job_id]
+    if job["status"] in ("generating", "queued"):
+        elapsed = int(time.time() - job.get("started_at", time.time()))
+        return {
+            "status": job["status"],
+            "job_id": job_id,
+            "mode": "video",
+            "elapsed_seconds": elapsed,
+            "message": f"Still {job['status']} after {elapsed}s. Call `flow_check_video` again with job_id '{job_id}'.",
+        }
+    return job["result"]
+
+
 @mcp.tool()
 def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
     """Open Google Flow (`https://labs.google/fx/tools/flow`) in a visible Chrome window to sign in with your Google email and use your Flow subscription credits (NO API key required).
@@ -116,7 +178,7 @@ def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Generating video in Google Flow...",
-        "openai/toolInvocation/invoked": "Video ready",
+        "openai/toolInvocation/invoked": "Video started",
     }
 )
 def flow_text_to_video(
@@ -139,7 +201,7 @@ def flow_text_to_video(
         use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits without needing an API key.
     """
     if use_browser_credits or not _has_real_api_key():
-        return _with_media(generate_video_via_flow_browser(
+        return _start_video_job(dict(
             prompt=prompt,
             mode="text_to_video",
             aspect_ratio=aspect_ratio,
@@ -159,7 +221,7 @@ def flow_text_to_video(
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Generating video in Google Flow...",
-        "openai/toolInvocation/invoked": "Video ready",
+        "openai/toolInvocation/invoked": "Video started",
     }
 )
 def flow_frames_to_video(
@@ -185,7 +247,7 @@ def flow_frames_to_video(
         use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits without needing an API key.
     """
     if use_browser_credits or not _has_real_api_key():
-        return _with_media(generate_video_via_flow_browser(
+        return _start_video_job(dict(
             prompt=prompt,
             mode="frames_to_video",
             first_frame=first_frame,
@@ -209,7 +271,7 @@ def flow_frames_to_video(
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Generating video in Google Flow...",
-        "openai/toolInvocation/invoked": "Video ready",
+        "openai/toolInvocation/invoked": "Video started",
     }
 )
 def flow_reference_to_video(
@@ -235,7 +297,7 @@ def flow_reference_to_video(
         use_browser_credits: If True (default), uses your logged-in Google Flow web session & credits.
     """
     if use_browser_credits or not _has_real_api_key():
-        return _with_media(generate_video_via_flow_browser(
+        return _start_video_job(dict(
             prompt=prompt,
             mode="reference_to_video",
             reference_images=reference_images,
@@ -364,6 +426,25 @@ def flow_show_latest(kind: str = "image") -> Any:
     path = max(files, key=os.path.getmtime)
     result = {"status": "completed", "mode": kind, "output_path": path, "message": f"Latest {kind}: {path}"}
     return _with_media(result, show_image=(kind != "video"))
+
+
+@mcp.tool(
+    meta={
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Checking on your Google Flow video...",
+        "openai/toolInvocation/invoked": "Checked video",
+    }
+)
+def flow_check_video(job_id: Optional[str] = None, wait_seconds: int = _CHECK_WAIT_SECONDS) -> Any:
+    """Get a video started by flow_text_to_video, flow_frames_to_video or flow_reference_to_video
+    (free, no credits). Waits up to `wait_seconds` for it to finish; if it is still generating,
+    call this again with the same job_id. Never start a new generation just because a video is slow.
+
+    Args:
+        job_id: The job_id the video tool returned. Defaults to the most recent job.
+        wait_seconds: How long to wait for the video before returning (max 45).
+    """
+    return _check_video_job(job_id, wait_seconds)
 
 
 @mcp.tool(
@@ -576,6 +657,11 @@ def create_openapi_app():
             )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/flow/check-video", operation_id="flowCheckVideo")
+    def api_check_video(job_id: Optional[str] = None):
+        """Get a video started by text-to-video or frames-to-video; call again while it is generating."""
+        return _plain(flow_check_video(job_id=job_id))
 
     @app.post("/flow/storyboard", operation_id="flowStoryboardDirector")
     def api_storyboard(req: StoryboardRequest):

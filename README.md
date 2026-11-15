@@ -13,7 +13,8 @@ Plan a shot with your assistant, then ask it to generate the video. The server d
 | Tool | Needs | What it does |
 | :--- | :--- | :--- |
 | `flow_browser_login` | Chrome | Opens Flow in Chrome so you can sign in once. Your sign-in is saved in `~/.google-flow-mcp/chrome-profile`. |
-| `flow_text_to_video` | Flow sign-in | Generates a video from a text prompt with your Flow credits and saves the MP4. |
+| `flow_text_to_video` | Flow sign-in | Starts a video from a text prompt with your Flow credits and returns a `job_id` right away. Video tools run in the background because a clip takes 1-5 minutes, longer than ChatGPT waits for a tool. |
+| `flow_check_video` | nothing | Gets a video started by any video tool (pass its `job_id`) and saves the MP4. Waits up to 45s per call; call again while it is still generating. Free, no credits. |
 | `flow_frames_to_video` | Flow sign-in *(experimental)* | Animates a starting image, or transitions from a first frame to a last frame. |
 | `flow_reference_to_video` | Flow sign-in *(experimental)* | Generates a video guided by reference images (product, character, style). |
 | `flow_generate_frame` | Flow sign-in | Generates an image (Nano Banana) with your Flow credits, saves it at full size, and returns the picture so Claude and ChatGPT can show it. Sets the aspect ratio (16:9, 4:3, 1:1, 3:4, 9:16) in Flow's settings and makes one image per request. Reference images are experimental. |
