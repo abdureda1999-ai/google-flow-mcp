@@ -184,6 +184,7 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 ## 🛠 Troubleshooting
 
 - **Use a different Google account for Flow**: move `~/.google-flow-mcp/chrome-profile` aside (for example rename it to `chrome-profile-backup`), then run `flow_browser_login` (or `.venv/bin/python examples/sign_in.py`) and sign in with the other account. Results include `flow_account`, and Flow links carry `authuser=` so they open in that account.
+- **ChatGPT hangs when the server runs as a background service (launchd) on a Mac**: macOS blocks background apps from reading `~/Downloads` until you approve it. Set `FLOW_MEDIA_DIR` to a folder outside Downloads, Documents and Desktop, for example `~/Google Flow`.
 - **Flow in another language**: the tool always opens Flow in English (`hl=en`), so accounts set to Arabic or other languages work.
 
 - **"Still on the Google Flow landing page"**: run `flow_browser_login` and finish signing in.
