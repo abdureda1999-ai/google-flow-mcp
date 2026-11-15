@@ -94,11 +94,12 @@ def _with_media(result: Dict[str, Any], show_image: bool = False) -> Any:
     except ImportError:  # older MCP SDK
         from mcp.server.fastmcp import Image  # type: ignore
 
-    content = [
-        TextContent(type="text", text=json.dumps(result, indent=2)),
-        Image(path=path).to_image_content(),
-    ]
-    return CallToolResult(content=content, structured_content={"result": result})
+    image = Image(path=path).to_image_content()
+    content = [TextContent(type="text", text=json.dumps(result, indent=2)), image]
+    # The ChatGPT widget reads the picture from _meta (not shown to the model), so it shows even if
+    # ChatGPT can't load files from this computer.
+    meta = {"image_data_url": f"data:{image.mime_type};base64,{image.data}"}
+    return CallToolResult(content=content, structured_content={"result": result}, _meta=meta)
 
 
 @mcp.tool()
@@ -262,9 +263,12 @@ IMAGE_WIDGET_HTML = r"""
 (function () {
   function render() {
     var root = document.getElementById("flow-root");
-    var out = (window.openai && window.openai.toolOutput) || {};
+    var oa = window.openai || {};
+    var out = oa.toolOutput || {};
     var r = out.result || out;
-    var url = r.download_url;
+    var meta = oa.toolResponseMetadata || {};
+    var url = meta.image_data_url || r.download_url;
+    var dl = r.download_url || meta.image_data_url;
     if (!url) {
       root.textContent = r.message || "Generating image in Google Flow...";
       return;
@@ -282,7 +286,7 @@ IMAGE_WIDGET_HTML = r"""
     }
     img.style.cssText = "display:block;max-width:100%;max-height:640px;border-radius:12px;margin:0 auto;";
     var link = document.createElement("a");
-    link.href = url;
+    link.href = dl;
     link.target = "_blank";
     link.rel = "noopener";
     link.textContent = isVideo ? "Download video" : "Download image";
@@ -308,6 +312,33 @@ IMAGE_WIDGET_HTML = r"""
 )
 def flow_image_widget() -> str:
     return IMAGE_WIDGET_HTML
+
+
+@mcp.tool(
+    meta={
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Opening your latest Google Flow result...",
+        "openai/toolInvocation/invoked": "Here it is",
+    }
+)
+def flow_show_latest(kind: str = "image") -> Any:
+    """Show the most recent image or video this tool saved, without generating anything (free, no credits).
+
+    Args:
+        kind: 'image' or 'video'.
+    """
+    exts = (".mp4", ".webm", ".mov") if kind == "video" else (".jpg", ".jpeg", ".png", ".webp")
+    media_dir = get_media_dir()
+    files = [
+        os.path.join(media_dir, f)
+        for f in os.listdir(media_dir)
+        if f.lower().endswith(exts) and not f.endswith("_flow_ui.png")
+    ]
+    if not files:
+        return {"status": "none", "message": f"No saved {kind} yet in {media_dir}."}
+    path = max(files, key=os.path.getmtime)
+    result = {"status": "completed", "mode": kind, "output_path": path, "message": f"Latest {kind}: {path}"}
+    return _with_media(result, show_image=(kind != "video"))
 
 
 @mcp.tool(

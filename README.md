@@ -16,7 +16,8 @@ Plan a shot with your assistant, then ask it to generate the video. The server d
 | `flow_text_to_video` | Flow sign-in | Generates a video from a text prompt with your Flow credits and saves the MP4. |
 | `flow_frames_to_video` | Flow sign-in *(experimental)* | Animates a starting image, or transitions from a first frame to a last frame. |
 | `flow_reference_to_video` | Flow sign-in *(experimental)* | Generates a video guided by reference images (product, character, style). |
-| `flow_generate_frame` | Flow sign-in | Generates an image (Nano Banana) with your Flow credits, saves it at full size, and returns the picture so Claude and ChatGPT can show it. Reference images are experimental. |
+| `flow_generate_frame` | Flow sign-in | Generates an image (Nano Banana) with your Flow credits, saves it at full size, and returns the picture so Claude and ChatGPT can show it. Sets the aspect ratio (16:9, 4:3, 1:1, 3:4, 9:16) in Flow's settings and makes one image per request. Reference images are experimental. |
+| `flow_show_latest` | nothing | Shows the most recent saved image or video again. Free, no credits. |
 | `flow_extend_or_edit_video` | Gemini API key | Extends or edits an existing clip. |
 | `flow_storyboard_director` | Gemini API key | Turns a brief into a multi-shot storyboard with frame and motion prompts. |
 
@@ -28,7 +29,7 @@ The video and image tools use your Flow sign-in by default. If you set `GEMINI_A
 3. Flow asks before spending credits (for example *"costing 30 credits?"*). The tool clicks **Approve** for that one generation only, never "Always approve", and returns the cost as `credits_cost`. The tools also read your credit balance before and after, and report `credits_used`, `credits_before` and `credits_after`.
 4. Waits for the result (up to 10 minutes for video, 4 for images), then saves it to your media folder. Images are saved at full size, not Flow's small preview. If the page misses the finished image, the tool reloads the project to find it.
 
-**Runs in the background.** Generation uses a minimized Chrome window (only its Dock icon shows), so it stays signed in without getting in your way. Set `FLOW_SHOW_BROWSER=1` to watch it work. Only `flow_browser_login` shows a window, so you can sign in.
+**Runs in the background.** On a Mac the tool's Chrome is hidden (like Cmd+H) and minimized as soon as it starts, so it stays signed in without showing a window. Only its Dock icon appears while it works. Set `FLOW_SHOW_BROWSER=1` to watch it work. Only `flow_browser_login` shows a window, so you can sign in.
 
 ---
 

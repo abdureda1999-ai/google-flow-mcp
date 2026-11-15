@@ -99,6 +99,8 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
         else []
     )
     front_app = _front_app_bundle_id() if headless else None
+    if headless:
+        _hide_chrome_as_it_starts(profile_dir)
     context = playwright.chromium.launch_persistent_context(
         user_data_dir=profile_dir,
         channel="chrome",
@@ -126,6 +128,45 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
             _minimize_window(context, pg)
         _give_focus_back(front_app)
     return context
+
+
+def _hide_chrome_as_it_starts(profile_dir: str, seconds: float = 900.0) -> None:
+    """macOS: hide the tool's Chrome (like Cmd+H) the moment it starts, and keep it hidden while
+    it loads, so no window shows up. Only touches the Chrome that uses the tool's own profile."""
+    if sys.platform != "darwin":
+        return
+    import subprocess
+    import threading
+
+    def hide_pid(pid: str) -> None:
+        subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e",
+             f'ObjC.import("AppKit"); var a = $.NSRunningApplication.runningApplicationWithProcessIdentifier({int(pid)}); if (a) {{ a.hide; }}'],
+            capture_output=True,
+            timeout=5,
+        )
+
+    def watch() -> None:
+        deadline = time.time() + seconds
+        seen = False
+        while time.time() < deadline:
+            try:
+                out = subprocess.run(
+                    ["pgrep", "-f", "--", f"user-data-dir={profile_dir}"], capture_output=True, text=True, timeout=3
+                ).stdout.split()
+                if seen and not out:
+                    return  # Chrome closed: generation finished
+                seen = seen or bool(out)
+                # The main Chrome process is the one without "--type=" (helpers have it).
+                for pid in out:
+                    cmd = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True).stdout
+                    if "--type=" not in cmd:
+                        hide_pid(pid)
+            except Exception:
+                pass
+            time.sleep(0.3 if time.time() > deadline - seconds + 20 else 0.2)
+
+    threading.Thread(target=watch, daemon=True).start()
 
 
 def _front_app_bundle_id() -> Optional[str]:
@@ -474,6 +515,7 @@ def generate_video_via_flow_browser(
             # Flow ignores length unless the prompt states it, so say it explicitly.
             length = f"{duration}-second " if duration else ""
             full_prompt = f"Create a {length}video ({aspect_ratio}): {prompt}"
+            flow_settings = _apply_flow_settings(page, aspect_ratio, count=1, kind="video")
 
             prompt_box.click()
             prompt_box.fill(full_prompt)
@@ -583,6 +625,7 @@ def generate_video_via_flow_browser(
                 "status": status,
                 "engine": "google_flow_browser_credits",
                 "mode": mode,
+                "flow_settings": flow_settings,
                 "prompt": full_prompt,
                 "credits_cost": credits_cost,
                 "output_path": downloaded_file,
@@ -663,6 +706,50 @@ def _flow_images(page: Any) -> List[Dict[str, Any]]:
               .filter(i => /flow\\.google\\.com\\/asb\\//.test(i.src) && !/video/i.test(i.alt || ''))
               .map(i => ({src: i.src, alt: i.alt || ''}))"""
     )
+
+
+_FLOW_RATIOS = ("16:9", "4:3", "1:1", "3:4", "9:16")
+_NEAREST_RATIO = {"21:9": "16:9", "3:2": "4:3", "5:4": "4:3", "2:3": "3:4", "4:5": "3:4", "9:21": "9:16"}
+
+
+def _apply_flow_settings(
+    page: Any, aspect_ratio: Optional[str], count: int = 1, kind: Optional[str] = None
+) -> Dict[str, Any]:
+    """Set aspect ratio and number of results in Flow's settings menu (the model button next to the
+    prompt). Returns what was applied. Best effort: older Flow layouts without this menu are skipped."""
+    applied: Dict[str, Any] = {}
+    ratio = (aspect_ratio or "").strip()
+    ratio = ratio if ratio in _FLOW_RATIOS else _NEAREST_RATIO.get(ratio, "")
+    try:
+        trigger = page.get_by_role("button", name="Settings trigger")
+        if trigger.count() == 0:
+            return applied
+        trigger.first.click()
+        time.sleep(1.5)
+        if kind in ("image", "video"):
+            label = r"Video$" if kind == "video" else r"(Image|Images)$"
+            opt = page.get_by_role("radio", name=re.compile(label))
+            if opt.count() > 0:
+                opt.first.click()
+                applied["kind"] = kind
+                time.sleep(1)
+        if ratio:
+            opt = page.get_by_role("radio", name=re.compile(rf"(^|\s){re.escape(ratio)}$"))
+            if opt.count() > 0:
+                opt.first.click()
+                applied["aspect_ratio"] = ratio
+                time.sleep(0.5)
+        if count:
+            opt = page.get_by_role("radio", name=re.compile(rf"^x{int(count)}$"))
+            if opt.count() > 0:
+                opt.first.click()
+                applied["count"] = int(count)
+                time.sleep(0.5)
+    except Exception:
+        pass
+    finally:
+        _close_overlays(page)
+    return applied
 
 
 def _project_images_fresh(context: Any, project_url: str) -> List[str]:
@@ -778,6 +865,7 @@ def generate_image_via_flow_browser(
             except Exception:
                 raise RuntimeError(f"Could not find the Flow prompt box on {page.url}. The Flow UI may have changed.")
 
+            flow_settings = _apply_flow_settings(page, aspect_ratio, count=1, kind="image")
             before = {i["src"] for i in _flow_images(page)}
             full_prompt = f"Create an image ({aspect_ratio}): {prompt}"
             prompt_box.click()
@@ -861,6 +949,7 @@ def generate_image_via_flow_browser(
                 "engine": "google_flow_browser_credits",
                 "mode": "image",
                 "prompt": full_prompt,
+                "flow_settings": flow_settings,
                 "credits_cost": credits_cost,
                 "approved": approved,
                 "output_path": saved,
