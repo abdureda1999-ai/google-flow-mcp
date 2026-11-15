@@ -136,6 +136,10 @@ FLOW_NGROK_DOMAIN=something.ngrok-free.app uvx --from git+https://github.com/abd
 ```
 
 The secret part of the link is saved in `~/.google-flow-mcp/secret`, so the full link stays the same every time. Add it to ChatGPT once. If ngrok drops (sleep, Wi-Fi change), the server reconnects on the same domain.
+
+Running it as a background service (launchd)? Add `FLOW_NGROK_DOMAIN` to the service's `EnvironmentVariables` and stop any separate `cloudflared` service, so only one tunnel points at the server.
+
+**Switching an existing ChatGPT plugin to the permanent link**: ChatGPT can't edit a plugin's URL. In **Plugins → Google Flow**, click **Uninstall**, then **Delete app** (uninstalling alone keeps the old app, and its name blocks the new one with "An app with this name already exists"). Then **Add → Add custom MCP server** with the new link and **No authentication**.
 - 🔒 **Anyone with the link can spend your Flow credits.** Don't share it, and press Ctrl-C when you're done.
 
 <details>
@@ -186,6 +190,9 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 
 - **Use a different Google account for Flow**: move `~/.google-flow-mcp/chrome-profile` aside (for example rename it to `chrome-profile-backup`), then run `flow_browser_login` (or `.venv/bin/python examples/sign_in.py`) and sign in with the other account. Results include `flow_account`, and Flow links carry `authuser=` so they open in that account.
 - **ChatGPT hangs when the server runs as a background service (launchd) on a Mac**: macOS blocks background apps from reading `~/Downloads` until you approve it. Set `FLOW_MEDIA_DIR` to a folder outside Downloads, Documents and Desktop, for example `~/Google Flow`.
+- **ChatGPT says "Google Flow's connection failed"**: ChatGPT can't reach the link saved in the plugin, and restarting the server won't fix that. A free Cloudflare quick tunnel can expire (`tunnel.log` shows `Unauthorized: Tunnel not found`), which gives you a new link. Check the URL in **Plugins → Google Flow** matches the one the server printed, and switch to a [permanent link](#permanent-link-recommended).
+- **A video "timed out" in ChatGPT**: update this server. Video tools now return a `job_id` at once, and ChatGPT fetches the clip with `flow_check_video`. Click **Refresh tools** in the plugin's settings after updating.
+- **ngrok `ERR_NGROK_105`**: the saved authtoken isn't valid. Run the full `ngrok config add-authtoken ...` command from [your ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken), with the real token, not a placeholder.
 - **Flow in another language**: the tool always opens Flow in English (`hl=en`), so accounts set to Arabic or other languages work.
 
 - **"Still on the Google Flow landing page"**: run `flow_browser_login` and finish signing in.
