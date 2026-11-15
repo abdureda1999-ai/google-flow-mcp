@@ -264,15 +264,22 @@ IMAGE_WIDGET_HTML = r"""
   function render() {
     var root = document.getElementById("flow-root");
     var oa = window.openai || {};
-    var out = oa.toolOutput || {};
+    var fr = window.__flowResult || {};
+    var out = oa.toolOutput || fr.out || {};
     var r = out.result || out;
-    var meta = oa.toolResponseMetadata || {};
+    var meta = oa.toolResponseMetadata || fr.meta || {};
     var url = meta.image_data_url || r.download_url;
     var dl = r.download_url || meta.image_data_url;
     if (!url) {
-      root.textContent = r.message || "Generating image in Google Flow...";
-      return;
+      if (r.message) {
+        root.textContent = r.message;
+        return r.status && r.status !== "completed";
+      }
+      root.textContent = "Generating in Google Flow... this takes about a minute.";
+      return false;
     }
+    if (root.getAttribute("data-shown") === url.slice(0, 200)) return true;
+    root.setAttribute("data-shown", url.slice(0, 200));
     root.innerHTML = "";
     var isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url) || /video/i.test(r.mode || "");
     var img = document.createElement(isVideo ? "video" : "img");
@@ -293,8 +300,26 @@ IMAGE_WIDGET_HTML = r"""
     link.style.cssText = "display:block;text-align:center;margin-top:8px;font-size:14px;color:inherit;";
     root.appendChild(img);
     root.appendChild(link);
+    return true;
   }
   window.addEventListener("openai:set_globals", render);
+  // MCP Apps hosts send the result by postMessage instead of window.openai.
+  window.addEventListener("message", function (e) {
+    var m = e && e.data;
+    if (!m || typeof m !== "object") return;
+    var p = m.params || {};
+    if (m.method === "ui/notifications/tool-result" || p.structuredContent || p._meta) {
+      window.__flowResult = { out: p.structuredContent || {}, meta: p._meta || {} };
+      render();
+    }
+  });
+  // Some ChatGPT views (side panel, Work mode) never send an update event, so keep checking
+  // until the result is there.
+  var tries = 0;
+  var timer = setInterval(function () {
+    tries += 1;
+    if (render() || tries > 900) clearInterval(timer);
+  }, 1000);
   render();
 })();
 </script>
