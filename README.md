@@ -117,8 +117,23 @@ ChatGPT shows "Generating image in Google Flow…", and after about a minute **t
 
 - Use a normal chat. ChatGPT's **Work** / agent mode opens Flow in its own browser instead of using this plugin, and won't show the image in the chat.
 - Keep that Terminal window open while you use ChatGPT. Your computer must stay on.
-- **The link changes each time the tunnel restarts.** Then open **Plugins → Google Flow**, update the URL, and click **Refresh tools**. Click **Refresh tools** after updating this server too.
-- To keep the same link, set `FLOW_SECRET` (keeps the secret part) and `FLOW_PUBLIC_URL` (your own fixed tunnel address, for example a named Cloudflare tunnel).
+- **The free Cloudflare link changes each time the tunnel restarts**, and ChatGPT can't edit a plugin's link, so you'd delete and re-add the plugin. To avoid that, use a permanent link (below).
+- Click **Refresh tools** in **Plugins → Google Flow** after updating this server.
+
+### Permanent link (recommended)
+
+A free ngrok account gives you one domain that never changes:
+
+1. Sign up at [dashboard.ngrok.com](https://dashboard.ngrok.com/signup), then run the `ngrok config add-authtoken ...` command shown under **Your Authtoken**.
+2. Copy your free domain from **Domains** (like `something.ngrok-free.app`).
+3. Start ChatGPT mode with it:
+
+```bash
+brew install ngrok
+FLOW_NGROK_DOMAIN=something.ngrok-free.app uvx --from git+https://github.com/abdureda1999-ai/google-flow-mcp google-flow-mcp chatgpt
+```
+
+The secret part of the link is saved in `~/.google-flow-mcp/secret`, so the full link stays the same every time. Add it to ChatGPT once. If ngrok drops (sleep, Wi-Fi change), the server reconnects on the same domain.
 - 🔒 **Anyone with the link can spend your Flow credits.** Don't share it, and press Ctrl-C when you're done.
 
 <details>
@@ -160,7 +175,8 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 | `FLOW_MEDIA_DIR` | `~/Downloads/google-flow` | Where videos, images and screenshots are saved. |
 | `GEMINI_API_KEY` | not set | Turns on the API-only tools. |
 | `FLOW_HOST` / `FLOW_PORT` | `127.0.0.1` / `8000` | Address for the HTTP transports. |
-| `FLOW_SECRET` | random each start | Secret part of the ChatGPT link. |
+| `FLOW_SECRET` | saved in `~/.google-flow-mcp/secret` | Secret part of the ChatGPT link. |
+| `FLOW_NGROK_DOMAIN` | not set | Your free permanent ngrok domain, so the ChatGPT link never changes. |
 | `FLOW_SHOW_BROWSER` | not set | Set to `1` to show the Chrome window while generating. |
 | `FLOW_PUBLIC_URL` | not set | Your own public address (for example a named Cloudflare tunnel) so the ChatGPT link stays the same. With it, no quick tunnel is started. |
 

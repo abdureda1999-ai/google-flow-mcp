@@ -565,6 +565,64 @@ def _start_cloudflare_tunnel(port: int):
     return None, None
 
 
+def _start_ngrok_tunnel(port: int, domain: str):
+    """Keep a permanent ngrok link (your free static domain) pointed at this server.
+    Restarts ngrok if it ever exits, so the link stays the same. Returns (stopper, public_url)."""
+    import shutil
+    import subprocess
+    import threading
+    import time
+
+    exe = shutil.which("ngrok")
+    if not exe:
+        return None, None
+    domain = domain.replace("https://", "").replace("http://", "").strip("/")
+    state = {"proc": None, "stop": False}
+
+    def run() -> None:
+        while not state["stop"]:
+            state["proc"] = subprocess.Popen(
+                [exe, "http", f"--url=https://{domain}", str(port), "--log=stdout", "--log-level=warn"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            state["proc"].wait()
+            if not state["stop"]:
+                time.sleep(5)  # network blip or sleep: reconnect on the same domain
+
+    threading.Thread(target=run, daemon=True).start()
+
+    class _Stopper:
+        def terminate(self) -> None:
+            state["stop"] = True
+            if state["proc"]:
+                state["proc"].terminate()
+
+    return _Stopper(), f"https://{domain}"
+
+
+def _load_or_create_secret() -> str:
+    """Use FLOW_SECRET, or a secret saved in ~/.google-flow-mcp/secret so the ChatGPT link stays the same."""
+    import secrets
+
+    if os.environ.get("FLOW_SECRET"):
+        return os.environ["FLOW_SECRET"]
+    path = os.path.join(os.path.expanduser("~"), ".google-flow-mcp", "secret")
+    try:
+        with open(path) as f:
+            saved = f.read().strip()
+        if saved:
+            return saved
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(18)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(token)
+    os.chmod(path, 0o600)
+    return token
+
+
 def _register_file_route(token: str) -> None:
     """Serve generated files at /<secret>/files/<name> so ChatGPT can show and download them."""
     from starlette.responses import FileResponse, PlainTextResponse
@@ -581,14 +639,17 @@ def _register_file_route(token: str) -> None:
 
 def run_chatgpt_mode(port: int) -> None:
     """One command for ChatGPT: MCP over HTTP on a secret path, exposed through a public tunnel."""
-    import secrets
     import sys
 
-    token = os.environ.get("FLOW_SECRET") or secrets.token_urlsafe(18)
+    token = _load_or_create_secret()
     path = f"/{token}/mcp"
-    # FLOW_PUBLIC_URL: use your own tunnel/domain (e.g. a named Cloudflare tunnel) instead of a new quick tunnel.
+    # FLOW_PUBLIC_URL: your own tunnel/domain. FLOW_NGROK_DOMAIN: a permanent free ngrok domain.
+    # Otherwise a temporary Cloudflare quick tunnel is started (its link changes on restart).
     public_url = (os.environ.get("FLOW_PUBLIC_URL") or "").rstrip("/") or None
+    ngrok_domain = os.environ.get("FLOW_NGROK_DOMAIN", "").strip()
     proc = None
+    if not public_url and ngrok_domain:
+        proc, public_url = _start_ngrok_tunnel(port, ngrok_domain)
     if not public_url:
         proc, public_url = _start_cloudflare_tunnel(port)
 
