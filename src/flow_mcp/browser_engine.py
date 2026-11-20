@@ -495,7 +495,7 @@ def generate_video_via_flow_browser(
             # 4. Fill the prompt box. Flow's current editor uses a contenteditable
             # div (role=textbox, "What do you want to create?"); older UIs used a <textarea>.
             # Note: a hidden reCAPTCHA <textarea> exists on the page, so only match visible ones.
-            prompt_box = page.get_by_role("textbox", name=re.compile(r"what do you want to create", re.I))
+            prompt_box = page.get_by_role("textbox", name=re.compile(r"what do you want to create|describe your goal", re.I))
             if prompt_box.count() == 0:
                 prompt_box = page.locator(
                     'textarea:visible, [contenteditable="true"][role="textbox"]:visible'
@@ -859,7 +859,7 @@ def generate_image_via_flow_browser(
                     file_inputs.first.set_input_files(files)
                     time.sleep(4)
 
-            prompt_box = page.get_by_role("textbox", name=re.compile(r"what do you want to create", re.I)).first
+            prompt_box = page.get_by_role("textbox", name=re.compile(r"what do you want to create|describe your goal", re.I)).first
             try:
                 prompt_box.wait_for(state="visible", timeout=30000)
             except Exception:
