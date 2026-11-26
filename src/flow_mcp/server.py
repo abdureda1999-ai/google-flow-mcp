@@ -107,9 +107,10 @@ def _with_media(result: Dict[str, Any], show_image: bool = False) -> Any:
 
 # Video generation takes 1-5 minutes, longer than ChatGPT (and some other clients) wait for a
 # tool call. So video tools start a background job and return at once; `flow_check_video`
-# fetches the result. One job runs at a time because all jobs share one Chrome profile.
+# fetches the result. One browser job runs at a time because all browser tools share one Chrome profile.
 _VIDEO_JOBS: Dict[str, Dict[str, Any]] = {}
-_VIDEO_LOCK = threading.Lock()
+_BROWSER_LOCK = threading.Lock()
+_VIDEO_LOCK = _BROWSER_LOCK  # backward-compatible alias
 _CHECK_WAIT_SECONDS = 45  # stays under ChatGPT's tool-call timeout
 
 
@@ -171,7 +172,8 @@ def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
     Args:
         wait_seconds: Seconds to wait for you to sign in before returning status (default 120).
     """
-    return login_and_verify_flow_session(wait_seconds=wait_seconds)
+    with _BROWSER_LOCK:
+        return login_and_verify_flow_session(wait_seconds=wait_seconds)
 
 
 @mcp.tool(
@@ -388,13 +390,37 @@ IMAGE_WIDGET_HTML = r"""
 """
 
 
+def _build_widget_csp_domains() -> List[str]:
+    """Allowed resource domains for ChatGPT's widget CSP across Cloudflare, ngrok, and custom tunnels."""
+    import urllib.parse
+
+    domains = [
+        "https://*.trycloudflare.com",
+        "https://*.ngrok-free.app",
+        "https://*.ngrok.app",
+    ]
+    ngrok_dom = os.environ.get("FLOW_NGROK_DOMAIN", "").strip().replace("https://", "").replace("http://", "").strip("/")
+    if ngrok_dom:
+        origin = f"https://{ngrok_dom}"
+        if origin not in domains:
+            domains.append(origin)
+    pub_url = os.environ.get("FLOW_PUBLIC_URL", "").strip()
+    if pub_url:
+        parsed = urllib.parse.urlparse(pub_url)
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if origin not in domains:
+                domains.append(origin)
+    return domains
+
+
 @mcp.resource(
     IMAGE_WIDGET_URI,
     name="flow-image-widget",
     mime_type="text/html+skybridge",
     meta={
         "openai/widgetDescription": "Shows the image or video generated in Google Flow with a download link.",
-        "openai/widgetCSP": {"resource_domains": ["https://*.trycloudflare.com"], "connect_domains": []},
+        "openai/widgetCSP": {"resource_domains": _build_widget_csp_domains(), "connect_domains": []},
     },
 )
 def flow_image_widget() -> str:
@@ -481,15 +507,14 @@ def flow_generate_frame(
         use_browser_credits: If True (default), uses your Google Flow sign-in and credits instead of the Gemini API.
     """
     if use_browser_credits or not _has_real_api_key():
-        return _with_media(
-            generate_image_via_flow_browser(
+        with _BROWSER_LOCK:
+            raw_res = generate_image_via_flow_browser(
                 prompt=prompt,
                 aspect_ratio=aspect_ratio,
                 reference_images=reference_images,
                 output_path=output_path,
-            ),
-            show_image=True,
-        )
+            )
+        return _with_media(raw_res, show_image=True)
     return generate_frame_image(
         prompt=prompt,
         reference_images=reference_images,
@@ -598,11 +623,29 @@ def _plain(result: Any) -> Any:
 
 def create_openapi_app():
     """Builds a FastAPI application exposing all Flow tools as REST endpoints for ChatGPT Actions."""
-    from fastapi import FastAPI, HTTPException
+    import secrets
+    from fastapi import Depends, FastAPI, HTTPException, Request
+
+    def _verify_openapi_secret(request: Request) -> None:
+        required_secret = os.environ.get("FLOW_SECRET", "").strip()
+        if not required_secret and os.environ.get("FLOW_OPENAPI_REQUIRE_SECRET", "").strip().lower() in {"1", "true", "yes"}:
+            required_secret = _load_or_create_secret()
+        if not required_secret:
+            return
+        auth = request.headers.get("authorization", "")
+        bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        candidate = (
+            bearer
+            or request.headers.get("x-flow-secret", "").strip()
+            or request.query_params.get("secret", "").strip()
+        )
+        if not candidate or not secrets.compare_digest(candidate, required_secret):
+            raise HTTPException(status_code=401, detail="Invalid or missing FLOW_SECRET credentials.")
 
     app = FastAPI(
         title="Google Flow Studio API (ChatGPT & Claude Bridge)",
         version="0.2.0",
+        dependencies=[Depends(_verify_openapi_secret)],
         description=(
             "OpenAPI bridge for ChatGPT Custom GPT Actions and REST clients to trigger "
             "Google Flow video generation using your logged-in Google Flow browser credits (no API key required) or Gemini API."
@@ -888,6 +931,9 @@ def main():
     args = parser.parse_args()
     if args.mode == "chatgpt":
         args.transport = "chatgpt"
+
+    if args.transport in ("chatgpt", "openapi", "sse", "streamable-http"):
+        os.environ.setdefault("FLOW_STRICT_MEDIA_SANDBOX", "1")
 
     if args.transport == "chatgpt":
         run_chatgpt_mode(args.port)

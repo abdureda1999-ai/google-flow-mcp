@@ -61,9 +61,61 @@ def get_media_dir() -> str:
     return media_dir
 
 
+from flow_mcp.engine import (
+    slugify as _shared_slugify,
+    validate_safe_input_path,
+    validate_safe_output_path,
+)
+
+
 def _slugify(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
-    return slug[:45] or "flow_output"
+    return _shared_slugify(text, default="flow_output")
+
+
+def get_max_credits_per_call() -> Optional[int]:
+    """Optional hard ceiling on credits spent per generation. Returns 0 when FLOW_NO_SPEND is set."""
+    if os.environ.get("FLOW_NO_SPEND", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return 0
+    raw = os.environ.get("FLOW_MAX_CREDITS_PER_CALL", "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _clear_stale_singleton_lock(profile_dir: str) -> None:
+    """Removes SingletonLock only when its owning Chrome process is no longer alive."""
+    lock_file = os.path.join(profile_dir, "SingletonLock")
+    if not os.path.lexists(lock_file):
+        return
+    try:
+        target = os.readlink(lock_file)
+        m = re.search(r"-(\d+)$", target)
+        if m and _pid_is_alive(int(m.group(1))):
+            raise RuntimeError(
+                f"Chrome profile '{profile_dir}' is currently in use by active process PID {m.group(1)}. "
+                "Wait for the running Google Flow session to finish or close that Chrome window."
+            )
+    except OSError:
+        pass
+    try:
+        os.remove(lock_file)
+    except OSError:
+        pass
 
 
 def _want_headless(headless: Optional[bool]) -> bool:
@@ -76,13 +128,8 @@ def _want_headless(headless: Optional[bool]) -> bool:
 def _launch_persistent_context(playwright: Any, headless: bool = False):
     """Launches Google Chrome with the persistent user profile."""
     profile_dir = get_profile_dir()
-    # Remove stale SingletonLock if a previous Chrome instance crashed
-    lock_file = os.path.join(profile_dir, "SingletonLock")
-    if os.path.lexists(lock_file):
-        try:
-            os.remove(lock_file)
-        except OSError:
-            pass
+    # Remove SingletonLock only if a previous Chrome instance crashed (never while active)
+    _clear_stale_singleton_lock(profile_dir)
 
     # Google signs out real headless Chrome, so "hidden" runs use a normal Chrome window
     # placed far off-screen instead. It stays signed in but never shows on your screen.
@@ -152,7 +199,10 @@ def _hide_chrome_as_it_starts(profile_dir: str, seconds: float = 900.0) -> None:
         while time.time() < deadline:
             try:
                 out = subprocess.run(
-                    ["pgrep", "-f", "--", f"user-data-dir={profile_dir}"], capture_output=True, text=True, timeout=3
+                    ["pgrep", "-f", "--", re.escape(f"user-data-dir={profile_dir}")],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
                 ).stdout.split()
                 if seen and not out:
                     return  # Chrome closed: generation finished
@@ -405,8 +455,17 @@ def generate_video_via_flow_browser(
         filename = f"flow_browser_{_slugify(prompt)}_{uuid.uuid4().hex[:6]}.mp4"
         output_path = os.path.join(get_media_dir(), filename)
     else:
-        output_path = os.path.abspath(output_path)
+        output_path = validate_safe_output_path(output_path) or output_path
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    validated_uploads: List[str] = []
+    if first_frame:
+        validated_uploads.append(validate_safe_input_path(first_frame))
+    if last_frame:
+        validated_uploads.append(validate_safe_input_path(last_frame))
+    if reference_images:
+        for img in reference_images:
+            validated_uploads.append(validate_safe_input_path(img))
 
     captured_video_urls: List[str] = []
 
@@ -476,15 +535,7 @@ def generate_video_via_flow_browser(
                         time.sleep(1.5)
 
             # 3. Upload frames or reference images if provided
-            files_to_upload: List[str] = []
-            if first_frame and os.path.exists(first_frame):
-                files_to_upload.append(os.path.abspath(first_frame))
-            if last_frame and os.path.exists(last_frame):
-                files_to_upload.append(os.path.abspath(last_frame))
-            if reference_images:
-                for img in reference_images:
-                    if os.path.exists(img):
-                        files_to_upload.append(os.path.abspath(img))
+            files_to_upload: List[str] = [p for p in validated_uploads if os.path.exists(p)]
 
             if files_to_upload:
                 file_inputs = page.locator('input[type="file"]')
@@ -542,6 +593,8 @@ def generate_video_via_flow_browser(
             downloaded_file: Optional[str] = None
             final_video_src: Optional[str] = None
             approved = False
+            rejected_over_budget = False
+            max_credits = get_max_credits_per_call()
             credits_cost: Optional[int] = None
 
             try:
@@ -556,6 +609,17 @@ def generate_video_via_flow_browser(
                         if approve_btn.count() > 0 and approve_btn.last.is_visible():
                             m = re.search(r"costing\s+(\d+)\s+credits", page.inner_text("body"), re.I)
                             credits_cost = int(m.group(1)) if m else None
+                            if max_credits is not None and (
+                                max_credits == 0 or (credits_cost is not None and credits_cost > max_credits)
+                            ):
+                                reject_btn = page.get_by_role("radio", name=re.compile(r"^(Reject|Decline|Cancel)$", re.I))
+                                if reject_btn.count() == 0:
+                                    reject_btn = page.get_by_role("button", name=re.compile(r"^(Reject|Decline|Cancel)$", re.I))
+                                if reject_btn.count() > 0 and reject_btn.last.is_visible():
+                                    reject_btn.last.click()
+                                    time.sleep(1)
+                                rejected_over_budget = True
+                                break
                             approve_btn.last.click()
                             approved = True
                             time.sleep(3)
@@ -604,6 +668,12 @@ def generate_video_via_flow_browser(
             if downloaded_file:
                 status = "completed"
                 message = f"Video generated with your Google Flow credits and saved to {downloaded_file}"
+            elif rejected_over_budget:
+                status = "rejected_over_budget"
+                message = (
+                    f"Generation rejected before spending credits: quoted cost ({credits_cost} credits) "
+                    f"exceeds configured ceiling ({max_credits} credits)."
+                )
             elif approved:
                 status = "timed_out_waiting_for_video"
                 message = (
@@ -832,8 +902,15 @@ def generate_image_via_flow_browser(
 
     if not output_path:
         output_path = os.path.join(get_media_dir(), f"flow_image_{_slugify(prompt)}_{uuid.uuid4().hex[:6]}.jpg")
+    else:
+        output_path = validate_safe_output_path(output_path) or output_path
     output_path = os.path.abspath(output_path)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    validated_refs: List[str] = []
+    if reference_images:
+        for f in reference_images:
+            validated_refs.append(validate_safe_input_path(f))
 
     with sync_playwright() as p:
         context = _launch_persistent_context(p, headless=_want_headless(headless))
@@ -852,8 +929,8 @@ def generate_image_via_flow_browser(
                 time.sleep(5)
             _ensure_english(page)
 
-            if reference_images:
-                files = [os.path.abspath(f) for f in reference_images if os.path.exists(f)]
+            if validated_refs:
+                files = [f for f in validated_refs if os.path.exists(f)]
                 file_inputs = page.locator('input[type="file"]')
                 if files and file_inputs.count() > 0:
                     file_inputs.first.set_input_files(files)
@@ -878,6 +955,8 @@ def generate_image_via_flow_browser(
                 prompt_box.press("Enter")
 
             approved = False
+            rejected_over_budget = False
+            max_credits = get_max_credits_per_call()
             credits_cost: Optional[int] = None
             found: Optional[str] = None
             project_url: Optional[str] = page.url if "/project/" in page.url else None
@@ -895,6 +974,17 @@ def generate_image_via_flow_browser(
                         if approve.count() > 0 and approve.last.is_visible():
                             costs = re.findall(r"costing\s+(\d+)\s+credits", page.inner_text("body"), re.I)
                             credits_cost = int(costs[-1]) if costs else None
+                            if max_credits is not None and (
+                                max_credits == 0 or (credits_cost is not None and credits_cost > max_credits)
+                            ):
+                                reject_btn = page.get_by_role("radio", name=re.compile(r"^(Reject|Decline|Cancel)$", re.I))
+                                if reject_btn.count() == 0:
+                                    reject_btn = page.get_by_role("button", name=re.compile(r"^(Reject|Decline|Cancel)$", re.I))
+                                if reject_btn.count() > 0 and reject_btn.last.is_visible():
+                                    reject_btn.last.click()
+                                    time.sleep(1)
+                                rejected_over_budget = True
+                                break
                             approve.last.click()  # this one generation only, never "Always approve"
                             approved = True
                             time.sleep(3)
@@ -930,6 +1020,12 @@ def generate_image_via_flow_browser(
 
             if saved:
                 status, message = "completed", f"Image generated with your Google Flow credits and saved to {saved}"
+            elif rejected_over_budget:
+                status = "rejected_over_budget"
+                message = (
+                    f"Image generation rejected before spending credits: quoted cost ({credits_cost} credits) "
+                    f"exceeds configured ceiling ({max_credits} credits)."
+                )
             elif found:
                 status, message = "download_failed", f"Image was generated but could not be downloaded. See {project_url or page.url}"
             else:
