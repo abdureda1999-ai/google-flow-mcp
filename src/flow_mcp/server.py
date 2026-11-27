@@ -22,6 +22,7 @@ try:
     from mcp.server.mcpserver import MCPServer as FastMCP
 except ImportError:
     from mcp.server.fastmcp import FastMCP  # type: ignore
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 from flow_mcp.browser_engine import (
@@ -49,6 +50,11 @@ mcp = FastMCP(
         "If the user has not logged into the Flow browser profile yet, call `flow_browser_login` once."
     ),
 )
+
+# Tool hints for clients. Generation tools spend credits on the user's own account, so they are
+# marked as not read-only and open-world; clients and assistants should confirm before calling them.
+_PAID = dict(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
+_FREE = dict(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 
 
 def _has_real_api_key() -> bool:
@@ -164,7 +170,7 @@ def _check_video_job(job_id: Optional[str], wait_seconds: int) -> Any:
     return job["result"]
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='Sign in to Google Flow (opens Chrome)', read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
 def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
     """Open Google Flow (`https://labs.google/fx/tools/flow`) in a visible Chrome window to sign in with your Google email and use your Flow subscription credits (NO API key required).
 
@@ -175,6 +181,7 @@ def flow_browser_login(wait_seconds: int = 120) -> Dict[str, Any]:
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(title='Generate video from text (spends Flow credits)', **_PAID),
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Generating video in Google Flow...",
@@ -191,6 +198,10 @@ def flow_text_to_video(
 ) -> Dict[str, Any]:
     """Generate a video from a text prompt using Google Flow.
     By default (`use_browser_credits=True` or when no API key is set), uses your logged-in Google Flow email and subscription credits at `labs.google/fx/tools/flow`.
+
+    Cost: spends Google Flow credits on the user's own Google account (Gemini API usage in API mode).
+    Flow shows the price and this tool approves that one charge for this one generation only, so
+    confirm with the user before calling it. The result reports `credits_cost`.
 
     Args:
         prompt: Detailed scene, camera motion, lighting, and sound design prompt.
@@ -218,6 +229,7 @@ def flow_text_to_video(
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(title='Animate frames into video (spends Flow credits)', **_PAID),
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Generating video in Google Flow...",
@@ -235,6 +247,10 @@ def flow_frames_to_video(
     use_browser_credits: bool = True,
 ) -> Dict[str, Any]:
     """Animate a starting image frame or interpolate smoothly between a starting frame and an ending frame in Google Flow.
+
+    Cost: spends Google Flow credits on the user's own Google account (Gemini API usage in API mode).
+    Flow shows the price and this tool approves that one charge for this one generation only, so
+    confirm with the user before calling it. The result reports `credits_cost`.
 
     Args:
         prompt: Description of the camera motion, action, transition, and sound design.
@@ -268,6 +284,7 @@ def flow_frames_to_video(
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(title='Video from reference images (spends Flow credits)', **_PAID),
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Generating video in Google Flow...",
@@ -285,6 +302,10 @@ def flow_reference_to_video(
     use_browser_credits: bool = True,
 ) -> Dict[str, Any]:
     """Generate a new video guided by reference images (product, character, style) in Google Flow (Ingredients to Video).
+
+    Cost: spends Google Flow credits on the user's own Google account (Gemini API usage in API mode).
+    Flow shows the price and this tool approves that one charge for this one generation only, so
+    confirm with the user before calling it. The result reports `credits_cost`.
 
     Args:
         prompt: Natural-language prompt describing how the reference images should be combined in the scene.
@@ -402,6 +423,7 @@ def flow_image_widget() -> str:
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(title='Show latest saved result (free)', **_FREE),
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Opening your latest Google Flow result...",
@@ -429,6 +451,7 @@ def flow_show_latest(kind: str = "image") -> Any:
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(title='Check on a generating video (free)', **_FREE),
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Checking on your Google Flow video...",
@@ -448,6 +471,7 @@ def flow_check_video(job_id: Optional[str] = None, wait_seconds: int = _CHECK_WA
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(title='Generate image (spends Flow credits)', **_PAID),
     meta={
         "openai/outputTemplate": IMAGE_WIDGET_URI,
         "openai/toolInvocation/invoking": "Generating image in Google Flow...",
@@ -469,6 +493,10 @@ def flow_generate_frame(
     By default (`use_browser_credits=True`, or when no API key is set) it uses your signed-in
     Google Flow account and credits, no API key needed. In that mode Flow picks the size, and
     `image_size`, `model` and `previous_interaction_id` are ignored.
+
+    Cost: spends Google Flow credits on the user's own Google account (Gemini API usage in API mode).
+    Flow shows the price and this tool approves that one charge for this one generation only, so
+    confirm with the user before calling it. The result reports `credits_cost`.
 
     Args:
         prompt: Detailed visual description of the frame or edit instruction.
@@ -501,7 +529,7 @@ def flow_generate_frame(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='Extend or edit video (Gemini API, paid)', **_PAID))
 def flow_extend_or_edit_video(
     prompt: str,
     mode: str = "extend",
@@ -514,7 +542,12 @@ def flow_extend_or_edit_video(
     strip_audio: bool = False,
     output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Extend a video scene (by 3s-10s, up to 30s cumulative) or edit an existing video's style, lighting, or objects."""
+    """Extend a video scene (by 3s-10s, up to 30s cumulative) or edit an existing video's style, lighting, or objects.
+
+    Cost: spends Google Flow credits on the user's own Google account (Gemini API usage in API mode).
+    Flow shows the price and this tool approves that one charge for this one generation only, so
+    confirm with the user before calling it. The result reports `credits_cost`.
+    """
     clean_mode = mode.strip().lower()
     if clean_mode not in {"extend", "edit"}:
         raise ValueError("mode must be 'extend' or 'edit'.")
@@ -533,7 +566,7 @@ def flow_extend_or_edit_video(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(title='Plan storyboard prompts (Gemini API)', read_only_hint=True, destructive_hint=False, idempotent_hint=False, open_world_hint=True))
 def flow_storyboard_director(
     concept: str,
     num_shots: int = 3,

@@ -112,8 +112,8 @@ def _launch_persistent_context(playwright: Any, headless: bool = False):
         locale="en-US",
         extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
         viewport={"width": 1440, "height": 900},
+        # No flags that hide automation: Chrome reports that it is automated, as normal.
         args=[
-            "--disable-blink-features=AutomationControlled",
             "--no-first-run",
             "--no-default-browser-check",
             "--lang=en-US",

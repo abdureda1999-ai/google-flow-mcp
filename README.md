@@ -5,6 +5,11 @@ Use **Google Flow** (Google's AI video studio at [flow.google.com](https://flow.
 Plan a shot with your assistant, then ask it to generate the video. The server drives Flow with **your own Google account and Flow credits**, so you don't need an API key.
 
 > ⚠️ **Unofficial project.** This is not made by or affiliated with Google. Sign-in mode automates the Flow website in a Chrome window on your computer. Automating a website may go against Google's Terms of Service, and Google can change Flow's UI at any time, which can break this tool. Use it at your own risk with your own account.
+>
+> **What it does on your behalf, in plain terms:**
+> - **Spends your Flow credits.** Each video or image call clicks Flow's **Approve** for that one charge (never "Always approve"). Tools that spend credits say so in their title, and assistants are asked to confirm with you first. Results report `credits_cost`.
+> - **Uses your signed-in Google account** in its own Chrome profile (`~/.google-flow-mcp/chrome-profile`). It doesn't hide that Chrome is automated, and it never sees or stores your password.
+> - **ChatGPT mode puts a link on the internet** that can spend your credits. Keep it private and stop the server when you don't need it.
 
 ---
 
