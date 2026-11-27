@@ -98,10 +98,75 @@ def sanitize_error(err: Any) -> str:
     return err_str
 
 
-def slugify(text: str) -> str:
-    """Converts a prompt into a safe filename slug."""
-    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
-    return slug[:45] or "flow_asset"
+_SENSITIVE_DIR_NAMES = {".ssh", ".aws", ".gnupg", ".kube"}
+
+
+def _is_within(path: str, root: str) -> bool:
+    real_path = os.path.realpath(path)
+    real_root = os.path.realpath(root)
+    return real_path == real_root or real_path.startswith(real_root + os.sep)
+
+
+def _touches_sensitive_path(path: str) -> bool:
+    real_path = os.path.realpath(path)
+    home = os.path.realpath(os.path.expanduser("~"))
+    blocked_roots = [
+        os.path.join(home, ".google-flow-mcp", "chrome-profile"),
+        os.path.join(home, ".google-flow-mcp", "secret"),
+        os.path.join(home, ".config", "gcloud"),
+        "/etc",
+        "/private/etc",
+    ]
+    for blocked in blocked_roots:
+        if _is_within(real_path, blocked):
+            return True
+    parts = set(real_path.split(os.sep))
+    return bool(parts & _SENSITIVE_DIR_NAMES)
+
+
+def is_strict_media_sandbox() -> bool:
+    val = os.environ.get("FLOW_STRICT_MEDIA_SANDBOX", "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
+def validate_safe_output_path(output_path: Optional[str]) -> Optional[str]:
+    """Validates custom output_path against sensitive directories and strict tunnel sandbox."""
+    if not output_path:
+        return None
+    resolved = os.path.abspath(os.path.expanduser(output_path))
+    if _touches_sensitive_path(resolved):
+        raise ValueError(f"Refusing to write output to sensitive path: {output_path}")
+    if is_strict_media_sandbox() and not _is_within(resolved, get_media_dir()):
+        raise ValueError(
+            f"Custom output_path must stay inside FLOW_MEDIA_DIR ({get_media_dir()}) when strict media sandbox is active."
+        )
+    return resolved
+
+
+def validate_safe_input_path(input_path: str) -> str:
+    """Validates local input asset paths before uploading to Flow or Gemini Files API."""
+    if is_file_uri(input_path):
+        return input_path
+    resolved = os.path.abspath(os.path.expanduser(input_path))
+    if _touches_sensitive_path(resolved):
+        raise ValueError(f"Refusing to read input asset from sensitive path: {input_path}")
+    if is_strict_media_sandbox():
+        allowed_roots = [get_media_dir()]
+        extra_dir = os.environ.get("FLOW_ALLOWED_INPUT_DIR", "").strip()
+        if extra_dir:
+            allowed_roots.append(os.path.expanduser(extra_dir))
+        if not any(_is_within(resolved, r) for r in allowed_roots):
+            raise ValueError(
+                f"Input path '{input_path}' must reside inside FLOW_MEDIA_DIR (or FLOW_ALLOWED_INPUT_DIR) when strict media sandbox is active."
+            )
+    return resolved
+
+
+def slugify(text: str, default: str = "flow_asset") -> str:
+    """Converts a prompt (including Arabic and other Unicode scripts) into a safe filename slug."""
+    cleaned = re.sub(r"[\u064B-\u065F\u0670\u0640]", "", text or "")
+    slug = re.sub(r"[^\w]+", "_", cleaned.lower(), flags=re.UNICODE).strip("_")
+    return slug[:45] or default
 
 
 def detect_mime_type(file_path: str) -> str:
@@ -200,6 +265,7 @@ def resolve_or_upload_asset(
         normalized = normalize_file_uri(asset_path)
         return normalized or asset_path, default_mime
 
+    asset_path = validate_safe_input_path(asset_path)
     if not os.path.exists(asset_path):
         raise FileNotFoundError(
             f"Asset '{asset_path}' is neither a valid Gemini File URI nor an existing local path."
@@ -260,7 +326,7 @@ def generate_frame_image(
         filename = f"frame_{slugify(prompt)}_{uuid.uuid4().hex[:6]}.png"
         output_path = os.path.join(get_media_dir(), filename)
     else:
-        output_path = os.path.abspath(output_path)
+        output_path = validate_safe_output_path(output_path) or output_path
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     client = genai.Client(http_options=types.HttpOptions(timeout=300 * 1000))
@@ -436,7 +502,7 @@ def generate_flow_video(
         filename = f"video_{slugify(prompt)}_{uuid.uuid4().hex[:6]}.mp4"
         output_path = os.path.join(get_media_dir(), filename)
     else:
-        output_path = os.path.abspath(output_path)
+        output_path = validate_safe_output_path(output_path) or output_path
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     client = genai.Client(http_options=types.HttpOptions(timeout=int(timeout) * 1000))
